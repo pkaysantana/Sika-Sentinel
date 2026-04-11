@@ -128,9 +128,10 @@ function checkTreasuryNotRestricted(action: Action, ctx: ContextSnapshot): Polic
   return null;
 }
 
-// ── Rule pipeline ─────────────────────────────────────────────────────────────
+// ── Rule pipelines ────────────────────────────────────────────────────────────
 
-const RULES: RuleChecker[] = [
+// Full transfer pipeline: all 7 rules
+const TRANSFER_RULES: RuleChecker[] = [
   checkRecipientPresent,      // R001
   checkAmountValid,           // R002
   checkActorAuthorised,       // R003
@@ -139,6 +140,13 @@ const RULES: RuleChecker[] = [
   checkAmountWithinLimit,     // R006
   checkTreasuryNotRestricted, // R007
 ];
+const TRANSFER_RULE_IDS = [R001, R002, R003, R004, R005, R006, R007];
+
+// Balance-read pipeline: only actor authorisation
+const BALANCE_RULES: RuleChecker[] = [
+  checkActorAuthorised,       // R003
+];
+const BALANCE_RULE_IDS = [R003];
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -148,7 +156,11 @@ const RULES: RuleChecker[] = [
  * If all rules pass, APPROVED is returned with the full rule trace.
  */
 export function evaluatePolicy(action: Action, context: ContextSnapshot): PolicyResult {
-  for (const rule of RULES) {
+  const isTransfer = TRANSFER_TYPES.has(action.actionType);
+  const rules = isTransfer ? TRANSFER_RULES : BALANCE_RULES;
+  const allRuleIds = isTransfer ? TRANSFER_RULE_IDS : BALANCE_RULE_IDS;
+
+  for (const rule of rules) {
     const result = rule(action, context);
     if (result !== null) return result;
   }
@@ -157,7 +169,7 @@ export function evaluatePolicy(action: Action, context: ContextSnapshot): Policy
     decision: "APPROVED",
     denialReason: null,
     denialDetail: "",
-    evaluatedRules: _ALL_RULE_IDS,
+    evaluatedRules: allRuleIds,
   };
 }
 

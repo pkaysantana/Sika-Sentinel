@@ -11,6 +11,7 @@ import type { ContextSnapshot } from "../context/loader";
 import { loadContext } from "../context/loader";
 import { evaluatePolicy } from "../policy/engine";
 import { executeHbarTransfer } from "../hedera/transfer";
+import { queryBalance } from "../hedera/balance";
 import { record as recordAudit } from "../audit/trail";
 
 // ── Pipeline stage ────────────────────────────────────────────────────────────
@@ -32,6 +33,7 @@ export interface PipelineResult {
 
   // Phase 2 — Hedera execution
   txId: string;
+  balanceHbar: number | null;   // populated for CHECK_BALANCE actions
 
   // Phase 2 — HCS audit
   hcsTopicId: string;
@@ -75,6 +77,7 @@ export function runPolicyOnly(action: Action): PipelineResult {
       stage: "ERROR",
       timestamp: now(),
       txId: "",
+      balanceHbar: null,
       hcsTopicId: "",
       hcsSequenceNumber: -1,
       error: String(err),
@@ -90,6 +93,7 @@ export function runPolicyOnly(action: Action): PipelineResult {
     stage: "POLICY_EVALUATED",
     timestamp: now(),
     txId: "",
+    balanceHbar: null,
     hcsTopicId: "",
     hcsSequenceNumber: -1,
     error: "",
@@ -110,20 +114,38 @@ export async function run(action: Action): Promise<PipelineResult> {
   const { context, policyResult } = phase1;
 
   let txId = "";
+  let balanceHbar: number | null = null;
   let stage: PipelineStage = "POLICY_EVALUATED";
 
-  // Execute transfer only when approved
   if (policyResult!.decision === "APPROVED") {
-    try {
-      const transferResult = await executeHbarTransfer(action);
-      txId = transferResult.txId;
-      stage = "EXECUTED";
-    } catch (err) {
-      return {
-        ...phase1,
-        stage: "ERROR",
-        error: `Transfer failed: ${err}`,
-      };
+    if (action.actionType === "HBAR_TRANSFER") {
+      // Execute transfer
+      try {
+        const transferResult = await executeHbarTransfer(action);
+        txId = transferResult.txId;
+        stage = "EXECUTED";
+      } catch (err) {
+        return {
+          ...phase1,
+          balanceHbar: null,
+          stage: "ERROR",
+          error: `Transfer failed: ${err}`,
+        };
+      }
+    } else if (action.actionType === "CHECK_BALANCE") {
+      // Execute balance query
+      try {
+        const balanceResult = await queryBalance(action);
+        balanceHbar = balanceResult.balanceHbar;
+        stage = "EXECUTED";
+      } catch (err) {
+        return {
+          ...phase1,
+          balanceHbar: null,
+          stage: "ERROR",
+          error: `Balance query failed: ${err}`,
+        };
+      }
     }
   }
 
@@ -146,6 +168,7 @@ export async function run(action: Action): Promise<PipelineResult> {
     stage,
     timestamp: now(),
     txId,
+    balanceHbar,
     hcsTopicId,
     hcsSequenceNumber,
     error: "",

@@ -232,6 +232,14 @@ export default function Home() {
           {result.policyResult?.denialDetail && (
             <p className="text-sm text-gray-500">{result.policyResult.denialDetail}</p>
           )}
+          {result.balanceHbar !== null && result.balanceHbar !== undefined && (
+            <p className="text-sm">
+              <span className="text-gray-400">Balance: </span>
+              <span className="text-green-300 font-mono font-semibold">
+                {result.balanceHbar} HBAR
+              </span>
+            </p>
+          )}
           {result.txId && (
             <p className="text-sm">
               <span className="text-gray-400">Tx ID: </span>
