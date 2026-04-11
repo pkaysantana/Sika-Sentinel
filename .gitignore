@@ -14,6 +14,12 @@ build/
 .mypy_cache/
 .ruff_cache/
 
+# Node / Next
+node_modules/
+.next/
+out/
+coverage/
+
 # OS
 .DS_Store
 Thumbs.db
