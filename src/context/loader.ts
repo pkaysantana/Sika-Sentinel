@@ -59,41 +59,47 @@ type ContextStore = z.infer<typeof ContextStoreSchema>;
 
 // ── In-memory fallback ────────────────────────────────────────────────────────
 
-const FALLBACK_STORE: ContextStore = {
-  treasury: { posture: "NORMAL" },
-  actors: {
-    "0.0.100": {
-      role: "OPERATOR",
-      partner_id: "partner-alpha",
-      amount_threshold_hbar: 100.0,
-      approved_recipients: ["0.0.800", "0.0.801"],
-      enforce_recipient_allowlist: true,
+// Returns a fresh deep copy each time so mutations (e.g. setTreasuryPosture)
+// don't bleed across calls to reloadStore() — critical for test isolation.
+function buildFallbackStore(): ContextStore {
+  return {
+    treasury: { posture: "NORMAL" },
+    actors: {
+      "0.0.100": {
+        role: "OPERATOR",
+        partner_id: "partner-alpha",
+        amount_threshold_hbar: 100.0,
+        approved_recipients: ["0.0.800", "0.0.801"],
+        enforce_recipient_allowlist: true,
+      },
+      "0.0.200": {
+        role: "PARTNER",
+        partner_id: "partner-beta",
+        amount_threshold_hbar: 25.0,
+        approved_recipients: ["0.0.800"],
+        enforce_recipient_allowlist: true,
+      },
+      "0.0.300": {
+        role: "ADMIN",
+        partner_id: "internal-ops",
+        amount_threshold_hbar: 500.0,
+        approved_recipients: [],
+        enforce_recipient_allowlist: false,
+      },
     },
-    "0.0.200": {
-      role: "PARTNER",
-      partner_id: "partner-beta",
-      amount_threshold_hbar: 25.0,
-      approved_recipients: ["0.0.800"],
-      enforce_recipient_allowlist: true,
-    },
-    "0.0.300": {
-      role: "ADMIN",
-      partner_id: "internal-ops",
-      amount_threshold_hbar: 500.0,
-      approved_recipients: [],
-      enforce_recipient_allowlist: false,
-    },
-  },
-};
+  };
+}
 
 // Module-level cache: loaded once per process
 let _store: ContextStore | null = null;
 
 // ── Store loading ─────────────────────────────────────────────────────────────
 
+// process.cwd() is the project root in both Next.js server bundles and Node scripts.
+// __dirname is NOT safe here — Next.js webpack bundles rewrite it to the .next output dir.
 const DEFAULT_STORE_PATH = path.resolve(
-  __dirname,
-  "../../scripts/context_store.json"
+  process.cwd(),
+  "scripts/context_store.json"
 );
 
 function resolveStorePath(): string {
@@ -112,10 +118,10 @@ function loadStore(): ContextStore {
       console.warn(
         `Failed to parse context store at ${storePath} (${err}); using fallback`
       );
-      _store = FALLBACK_STORE;
+      _store = buildFallbackStore();
     }
   } else {
-    _store = FALLBACK_STORE;
+    _store = buildFallbackStore();
   }
 
   return _store;

@@ -40,6 +40,7 @@ export default function Home() {
   const [actorId, setActorId] = useState(DEMO_ACTORS[0].id);
   const [result, setResult] = useState<PipelineResult | null>(null);
   const [auditLog, setAuditLog] = useState<AuditMessage[]>([]);
+  const [auditConfigured, setAuditConfigured] = useState<boolean | null>(null);
   const [loading, setLoading] = useState(false);
   const [replayLoading, setReplayLoading] = useState(false);
   const [error, setError] = useState("");
@@ -73,6 +74,7 @@ export default function Home() {
       const res = await fetch("/api/audit/replay");
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Replay failed");
+      setAuditConfigured(data.configured ?? false);
       setAuditLog(data.messages ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -189,16 +191,81 @@ export default function Home() {
               HCS sequence #{result.hcsSequenceNumber} on topic {result.hcsTopicId}
             </p>
           )}
-          <details className="text-xs text-gray-500">
-            <summary className="cursor-pointer hover:text-gray-400">
-              Rules evaluated
+          {(() => {
+            const rules = result.policyResult?.evaluatedRules ?? [];
+            return rules.length > 0 ? (
+              <details className="text-xs text-gray-500">
+                <summary className="cursor-pointer hover:text-gray-400">
+                  Rules evaluated ({rules.length})
+                </summary>
+                <ul className="mt-1 ml-4 list-disc">
+                  {rules.map((r) => (
+                    <li key={r}>{r}</li>
+                  ))}
+                </ul>
+              </details>
+            ) : null;
+          })()}
+
+          {/* ── DEBUG ── remove before demo ── */}
+          <details className="mt-3 border border-yellow-800 rounded p-2 text-xs">
+            <summary className="cursor-pointer text-yellow-500 font-bold">
+              [DEBUG] Pipeline trace
             </summary>
-            <ul className="mt-1 ml-4 list-disc">
-              {result.policyResult?.evaluatedRules.map((r) => (
-                <li key={r}>{r}</li>
-              ))}
-            </ul>
+            <div className="mt-2 space-y-2 text-gray-400">
+              <div>
+                <span className="text-yellow-600 font-semibold">Raw instruction</span>
+                <pre className="mt-0.5 whitespace-pre-wrap break-all text-gray-300">
+                  {result.action.rawInstruction}
+                </pre>
+              </div>
+              <div>
+                <span className="text-yellow-600 font-semibold">Parsed action</span>
+                <pre className="mt-0.5 whitespace-pre-wrap break-all text-gray-300">
+                  {JSON.stringify(
+                    {
+                      actionType: result.action.actionType,
+                      actorId: result.action.actorId,
+                      recipientId: result.action.recipientId,
+                      amountHbar: result.action.amountHbar,
+                      correlationId: result.action.correlationId,
+                    },
+                    null,
+                    2
+                  )}
+                </pre>
+              </div>
+              <div>
+                <span className="text-yellow-600 font-semibold">Policy decision</span>
+                <pre className="mt-0.5 text-gray-300">
+                  {result.policyResult?.decision ?? "null"} (stage: {result.stage})
+                </pre>
+              </div>
+              <div>
+                <span className="text-yellow-600 font-semibold">Reason / rules</span>
+                <pre className="mt-0.5 whitespace-pre-wrap break-all text-gray-300">
+                  {JSON.stringify(
+                    {
+                      denialReason: result.policyResult?.denialReason ?? null,
+                      denialDetail: result.policyResult?.denialDetail ?? "",
+                      evaluatedRules: result.policyResult?.evaluatedRules ?? [],
+                    },
+                    null,
+                    2
+                  )}
+                </pre>
+              </div>
+              {result.error && (
+                <div>
+                  <span className="text-red-500 font-semibold">Error</span>
+                  <pre className="mt-0.5 whitespace-pre-wrap break-all text-red-400">
+                    {result.error}
+                  </pre>
+                </div>
+              )}
+            </div>
           </details>
+          {/* ── END DEBUG ── */}
         </section>
       )}
 
@@ -214,10 +281,14 @@ export default function Home() {
             {replayLoading ? "Loading..." : "Refresh"}
           </button>
         </div>
-        {auditLog.length === 0 ? (
-          <p className="text-sm text-gray-500">
-            Click Refresh to load the on-chain audit history.
+        {auditConfigured === null ? (
+          <p className="text-sm text-gray-500">Click Refresh to load the on-chain audit history.</p>
+        ) : !auditConfigured ? (
+          <p className="text-sm text-yellow-600">
+            HCS_TOPIC_ID not configured — run <code className="bg-gray-800 px-1 rounded">npm run create-topic</code> then set the ID in <code className="bg-gray-800 px-1 rounded">.env</code>.
           </p>
+        ) : auditLog.length === 0 ? (
+          <p className="text-sm text-gray-500">No audit events found yet on this topic.</p>
         ) : (
           <div className="space-y-2">
             {auditLog.map((msg) => {
