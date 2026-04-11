@@ -1,0 +1,26 @@
+{
+  "_comment": "Sika Sentinel context store — edit this file to change demo actors, thresholds, and treasury posture. Reload with reload_store() or restart the process.",
+  "treasury": {
+    "posture": "NORMAL"
+  },
+  "actors": {
+    "0.0.100": {
+      "role": "OPERATOR",
+      "partner_id": "partner-alpha",
+      "amount_threshold_hbar": 100.0,
+      "approved_recipients": ["0.0.800", "0.0.801"]
+    },
+    "0.0.200": {
+      "role": "PARTNER",
+      "partner_id": "partner-beta",
+      "amount_threshold_hbar": 25.0,
+      "approved_recipients": ["0.0.800"]
+    },
+    "0.0.300": {
+      "role": "ADMIN",
+      "partner_id": "internal-ops",
+      "amount_threshold_hbar": 500.0,
+      "approved_recipients": ["0.0.800", "0.0.801", "0.0.802"]
+    }
+  }
+}
