@@ -13,7 +13,7 @@ Financial workflows break down when humans or AI agents are permitted to move mo
 
 **Current Solutions**: Enterprise treasury platforms (e.g. Kyriba, Coupa) offer approval workflows, but they are closed, institution-owned, and not machine-native. AI agent frameworks can interpret instructions and trigger actions but have no built-in policy enforcement or verifiable audit trail. Private databases give operators an internal record, but not cross-party verifiable evidence.
 
-**Why Web3?**: The core gap that Web2 cannot close is *cross-boundary trust*. A private database gives you "we say this happened." Hedera gives you ordered, tamper-evident, shared evidence that multiple counterparties — operators, partners, regulators, auditors — can independently verify. Additionally, HBAR and HTS provide machine-native value movement: an AI agent can execute a real programmable financial transfer without proxying through a bank API or batch process. These two properties together — verifiable evidence and native programmable value — are not available on Web2 infrastructure.
+**Why Web3?**: The core gap that Web2 cannot close is *cross-boundary trust*. A private database gives you "we say this happened." Hedera gives you ordered, tamper-evident, shared evidence that multiple counterparties — operators, partners, regulators, auditors — can independently verify. Additionally, HBAR provides machine-native value movement in the MVP, with HTS as a future extension for tokenized payout rails: an AI agent can execute a real programmable financial transfer without proxying through a bank API or batch process. Web2 can support internal approval workflows and proprietary payment integrations, but it does not provide the same combination of shared tamper-evident evidence, open programmable execution, and cross-organisational verification that Hedera provides.
 
 ---
 
@@ -22,6 +22,8 @@ Financial workflows break down when humans or AI agents are permitted to move mo
 Sika Sentinel is a runtime control and evidence layer for delegated financial action. It accepts payout or treasury instructions in natural language, parses them into structured internal actions, loads policy-relevant context, applies deterministic rules, executes approved actions on Hedera, and records the full decision trail — approvals and denials — to an immutable on-ledger log.
 
 The result is a governed payout workflow where AI agents (or human operators) can act within defined bounds, and any stakeholder can replay and verify the exact sequence of what happened, what was allowed, and what was blocked.
+
+Sentinel is designed as the runtime engine behind both future SikaHub partner workflows and end-user delegated payment flows.
 
 **Hackathon Track Alignment**: Core alignment with the *Agentic Economy* theme. Sentinel is precisely the kind of agent that "makes payments, manages tokens, coordinates decisions, and proves its actions on-chain" — as described in the hackathon brief. It directly addresses the compliance agent and agentic payment flow ideas cited as inspiration.
 
@@ -105,7 +107,7 @@ Operator / Agent
 
 ---
 
-## 4. Hedera Network Impact
+## 4. Illustrative network impact if operators adopt the workflow
 
 ### Account Creation
 - Each partner operator onboarded requires a Hedera account (Account ID + key pair). At MVP, the demo creates at least 2–3 testnet accounts (operator, recipient, treasury).
@@ -133,7 +135,7 @@ Operator / Agent
 ## 5. Innovation & Differentiation
 
 ### Ecosystem Gap
-No existing Hedera project combines runtime policy enforcement with on-ledger decision evidence for delegated financial action. The Agent Kit provides tools for *doing* things on Hedera; Sentinel adds the governance layer that controls *whether* those things are allowed and *proves* what happened. This is a new capability class for the Hedera ecosystem.
+We have not seen an existing Hedera project that combines runtime policy enforcement with on-ledger decision evidence for delegated financial action in this way. The Agent Kit provides tools for *doing* things on Hedera; Sentinel adds the governance layer that controls *whether* those things are allowed and *proves* what happened. This is a new capability class for the Hedera ecosystem.
 
 ### Cross-Chain Comparison
 - **Coinbase agentic wallets / x402**: Focus on machine-native payments and agent commerce. No policy enforcement or auditability layer.
@@ -144,7 +146,7 @@ No existing Hedera project combines runtime policy enforcement with on-ledger de
 **Sentinel's gap**: existing systems either help agents pay autonomously, or help institutions keep private records. Sentinel governs *delegated* financial action at runtime and preserves evidence in a form that multiple stakeholders across organisational boundaries can trust.
 
 ### Novel Hedera Usage
-Using HCS not merely as a log of successful transactions, but as a **decision evidence layer** — capturing denials, policy context, and correlation IDs alongside approvals. This creates a verifiable governance record rather than just a transaction history. This framing of HCS has not been seen before in the Hedera ecosystem.
+Sentinel uses HCS as a runtime governance evidence layer, capturing not only successful actions but also denials and policy context, creating a verifiable operational record rather than just a transaction history.
 
 ---
 
@@ -152,14 +154,14 @@ Using HCS not merely as a log of successful transactions, but as a **decision ev
 
 ### Technical Feasibility
 
-- **Hedera Services Required**: HCS (topic creation + message submission), HBAR transfers, Hedera Agent Kit (JS or Python), optional Hiero CLI
-- **Team Capabilities**: Python-led implementation, fast iteration, AI-assisted coding (Claude Code, Codex, Gemini, ChatGPT), frontend (React/JS), UX, and data/backend support
+- **Hedera Services Required**: HCS (topic creation + message submission), HBAR transfers, Hedera Agent Kit, optional Hiero CLI
+- **Team Capabilities**: MVP implementation will be Python-first for backend/orchestration and a lightweight frontend chosen for speed and clarity. AI-assisted coding, fast iteration, UX, and data/backend support
 - **Technical Risks**:
   1. Agent Kit API surface is new — unexpected tool behaviour under load
   2. HCS message latency in demo conditions
   3. Frontend/backend integration time pressure in 17-hour window
 - **Mitigation**:
-  1. Use hedera-agent-kit v3 (npm) with documented examples; fallback to Hiero CLI for execution if Agent Kit tools stall
+  1. Use Hedera Agent Kit on the primary Python path with documented examples; fallback to Hiero CLI for execution if Agent Kit tooling stalls
   2. HCS is documented as ~3–5s finality — demo flow paced to accommodate
   3. Frontend scoped to a single operator view with minimal state — Angela + Jules own this with clear interface spec from Don
 
@@ -189,6 +191,8 @@ Three specific properties that Web2 cannot replicate:
 ## 7. Execution Plan
 
 ### MVP Scope (Hackathon)
+
+The hackathon MVP will demonstrate one governed payout loop: one denied instruction, one approved instruction, and one replayable audit trail.
 
 | Feature | Priority | Estimated Effort | Hedera Service |
 |---------|----------|-----------------|----------------|
@@ -233,6 +237,8 @@ Three specific properties that Web2 cannot replicate:
 ---
 
 ## 8. Validation Strategy
+
+We are at an early validation stage: no pilots or LOIs yet, but meaningful ecosystem feedback and strong external market evidence.
 
 ### Feedback Sources
 
@@ -296,11 +302,11 @@ Three specific properties that Web2 cannot replicate:
 3. **Hedera Integration** (30 sec):
    > "We use three Hedera primitives: the Agent Kit for natural-language-to-action orchestration, HBAR for machine-native value movement, and HCS for tamper-evident decision evidence. HCS is doing something you may not have seen before — logging not just approvals, but denials and policy context, creating a governance record rather than just a transaction log."
 
-4. **Traction** (20 sec):
+4. **Validation** (20 sec):
    > "We validated the SikaHub vision at EasyA × Stellar Meridian in October 2024 — a Stellar Foundation judge asked to stay updated. The market signal is strong: Sub-Saharan Africa is the fastest-growing mobile money region globally, and the most expensive remittance corridor in the world."
 
 5. **The Opportunity** (20 sec):
-   > "This is infrastructure. Every operator, fintech, or NGO running delegated payment workflows on Hedera is a potential customer. We monetise on subscription plus per-transaction governance fees. The Hedera incubator launching May 18th is our next step."
+   > "This is infrastructure. Every operator, fintech, or NGO that needs governed delegated payment workflows is a potential customer, and Hedera is our execution and evidence rail. We monetise on subscription plus per-transaction governance fees. The Hedera incubator launching May 18th is our next step."
 
 6. **The Ask** (10 sec):
    > "We're building Sika Sentinel to be the governance layer for the agentic economy on Hedera. We'd love your support, introductions to operators, and a path into the incubator."
