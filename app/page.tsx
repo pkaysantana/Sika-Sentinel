@@ -525,20 +525,31 @@ export default function Home() {
 
         {/* Per-submission audit summary — only shown after a run */}
         {result && (() => {
+          const isBlocked = result.stage === "PARSE_BLOCKED";
           const decision = result.policyResult?.decision;
           const auditWritten = !!result.hcsTopicId && result.hcsSequenceNumber >= 0;
+          // A non-fatal HCS failure: pipeline ran past policy but topic is still empty
+          const auditFailed = !auditWritten && !isBlocked &&
+            result.stage !== "POLICY_EVALUATED" && result.stage !== "ERROR";
+
+          const displayOutcome = isBlocked ? "PARSE_BLOCKED" : (decision ?? "—");
           const outcomeClass =
-            decision === "APPROVED"    ? "text-green-400"  :
-            decision === "DENIED"      ? "text-red-400"    :
-            decision === "APPROVAL_REQUIRED" ? "text-yellow-400" :
-            decision === "MANUAL_REVIEW"     ? "text-orange-400" :
-                                               "text-gray-400";
+            displayOutcome === "APPROVED"          ? "text-green-400"  :
+            displayOutcome === "DENIED"            ? "text-red-400"    :
+            displayOutcome === "APPROVAL_REQUIRED" ? "text-yellow-400" :
+            displayOutcome === "MANUAL_REVIEW"     ? "text-orange-400" :
+            displayOutcome === "PARSE_BLOCKED"     ? "text-amber-400"  :
+                                                     "text-gray-400";
 
           return (
             <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs font-mono">
+              {/* Outcome first — anchors the grid */}
+              <span className="text-gray-500">Outcome</span>
+              <span className={outcomeClass}>{displayOutcome}</span>
+
               <span className="text-gray-500">Audit written</span>
-              <span className={auditWritten ? "text-green-400" : "text-gray-600"}>
-                {auditWritten ? "yes" : result.stage === "EXECUTED" ? "failed (non-fatal)" : "no"}
+              <span className={auditWritten ? "text-green-400" : auditFailed ? "text-yellow-500" : "text-gray-600"}>
+                {auditWritten ? "yes" : auditFailed ? "failed (non-fatal)" : "no"}
               </span>
 
               {result.hcsTopicId && (
@@ -564,19 +575,14 @@ export default function Home() {
                   </a>
                 </>
               )}
-
-              <span className="text-gray-500">Outcome</span>
-              <span className={outcomeClass}>
-                {result.stage === "PARSE_BLOCKED" ? "PARSE_BLOCKED" : (decision ?? "—")}
-              </span>
             </div>
           );
         })()}
 
         {/* On-chain replay history */}
-        <details className="group" open={auditLog.length > 0}>
-          <summary className="cursor-pointer flex items-center gap-2 text-xs text-gray-500 hover:text-gray-300 list-none">
-            <span className="font-mono">▶</span>
+        <details open={auditLog.length > 0}>
+          <summary className="cursor-pointer flex items-center gap-2 text-xs text-gray-500 hover:text-gray-300 list-none select-none">
+            <span className="font-mono transition-transform [[open]_&]:rotate-90">▶</span>
             <span className="font-semibold">On-chain replay history</span>
             <button
               type="button"
@@ -588,7 +594,7 @@ export default function Home() {
             </button>
           </summary>
 
-          <div className="mt-3">
+          <div className="mt-3 space-y-2">
             {auditConfigured === null ? (
               <p className="text-xs text-gray-600">Click Refresh to load the on-chain audit history.</p>
             ) : !auditConfigured ? (
@@ -599,32 +605,57 @@ export default function Home() {
               </p>
             ) : auditLog.length === 0 ? (
               <p className="text-xs text-gray-600">No audit events found yet on this topic.</p>
-            ) : (
-          <div className="space-y-2">
-            {auditLog.map((msg) => {
-              const b = getBadge(msg.policyResult.decision);
+            ) : auditLog.map((msg) => {
               const ac = msg.agentContext;
+              // A PARSE_BLOCKED event has: decision=DENIED, denialReason=null,
+              // evaluatedRules=[], and agentContext present with low confidence.
+              const isParseBlocked =
+                msg.policyResult.decision === "DENIED" &&
+                msg.policyResult.denialReason === null &&
+                msg.policyResult.evaluatedRules.length === 0 &&
+                !!ac;
+              const displayDecision = isParseBlocked ? "PARSE_BLOCKED" : msg.policyResult.decision;
+              const decisionClass =
+                displayDecision === "APPROVED"          ? "text-green-400"  :
+                displayDecision === "DENIED"            ? "text-red-400"    :
+                displayDecision === "APPROVAL_REQUIRED" ? "text-yellow-400" :
+                displayDecision === "MANUAL_REVIEW"     ? "text-orange-400" :
+                displayDecision === "PARSE_BLOCKED"     ? "text-amber-400"  :
+                                                          "text-gray-400";
+              const b = isParseBlocked
+                ? { label: "PARSE BLOCKED", className: "bg-amber-900 text-amber-300" }
+                : getBadge(msg.policyResult.decision);
+
               return (
                 <div
                   key={msg.correlationId}
                   className="border border-gray-800 rounded p-3 text-xs space-y-2"
                 >
-                  {/* ── Meta row: decision · seq · timestamp ── */}
+                  {/* Meta row */}
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className={`px-2 py-0.5 rounded font-bold ${b.className}`}>
                       {b.label}
                     </span>
                     <span className="text-gray-600">#{msg.sequenceNumber}</span>
                     <span className="text-gray-600">{new Date(msg.timestamp).toLocaleString()}</span>
+                    {ac && (
+                      <>
+                        <span className="text-gray-700">·</span>
+                        <span className="text-indigo-500">{ac.parserMode}</span>
+                        <span className={
+                          ac.confidence >= 0.8 ? "text-green-600" :
+                          ac.confidence >= 0.5 ? "text-yellow-600" :
+                                                 "text-red-600"
+                        }>{Math.round(ac.confidence * 100)}%</span>
+                      </>
+                    )}
                   </div>
 
-                  {/* ── Evidence grid ── */}
+                  {/* Evidence grid */}
                   <div className="grid grid-cols-[6rem_1fr] gap-x-3 gap-y-0.5 font-mono">
-                    {/* What the user said */}
                     <span className="text-gray-600">Instruction</span>
                     <span className="text-gray-300 break-all">{msg.action.rawInstruction}</span>
 
-                    {/* What the agent interpreted */}
                     <span className="text-gray-600">Intent</span>
                     <span className="text-gray-300">{msg.action.actionType}</span>
 
@@ -634,44 +665,28 @@ export default function Home() {
                         <span className="text-gray-300">
                           {msg.action.amountHbar > 0 ? `${msg.action.amountHbar} HBAR` : "—"}
                         </span>
-
                         <span className="text-gray-600">Recipient</span>
-                        <span className="text-gray-300">
-                          {msg.action.recipientId || "—"}
-                        </span>
+                        <span className="text-gray-300">{msg.action.recipientId || "—"}</span>
                       </>
                     )}
 
-                    {ac && (
-                      <>
-                        <span className="text-gray-600">Parser</span>
-                        <span className="flex items-center gap-1.5">
-                          <span className="text-indigo-400">{ac.parserMode}</span>
-                          <span className={
-                            ac.confidence >= 0.8
-                              ? "text-green-500"
-                              : ac.confidence >= 0.5
-                              ? "text-yellow-500"
-                              : "text-red-500"
-                          }>
-                            {Math.round(ac.confidence * 100)}% confidence
-                          </span>
-                        </span>
-                      </>
-                    )}
-
-                    {/* What policy decided */}
                     <span className="text-gray-600">Decision</span>
-                    <span className="text-gray-300">{msg.policyResult.decision}</span>
+                    <span className={decisionClass}>{displayDecision}</span>
 
-                    {msg.policyResult.denialReason && (
+                    {!isParseBlocked && msg.policyResult.denialReason && (
                       <>
                         <span className="text-gray-600">Reason</span>
-                        <span className="text-gray-400">{msg.policyResult.denialReason}</span>
+                        <span className="text-red-400">{msg.policyResult.denialReason}</span>
                       </>
                     )}
 
-                    {/* What executed */}
+                    {isParseBlocked && msg.policyResult.denialDetail && (
+                      <>
+                        <span className="text-gray-600">Reason</span>
+                        <span className="text-amber-400 whitespace-normal">{msg.policyResult.denialDetail}</span>
+                      </>
+                    )}
+
                     {msg.txId && (
                       <>
                         <span className="text-gray-600">Tx</span>
@@ -687,9 +702,8 @@ export default function Home() {
                     )}
                   </div>
 
-                  {/* Parse warnings, if any */}
                   {ac?.parseWarnings && ac.parseWarnings.length > 0 && (
-                    <ul className="space-y-0.5 pt-0.5 border-t border-gray-800">
+                    <ul className="space-y-0.5 pt-1 border-t border-gray-800">
                       {ac.parseWarnings.map((w, i) => (
                         <li key={i} className="text-orange-500">⚡ {w}</li>
                       ))}
@@ -698,8 +712,6 @@ export default function Home() {
                 </div>
               );
             })}
-          </div>
-            )}
           </div>
         </details>
       </section>
