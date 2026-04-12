@@ -20,18 +20,23 @@ export interface BalanceResult {
 async function queryBalanceSdk(action: Action): Promise<BalanceResult> {
   const { Client, AccountBalanceQuery, AccountId } = await import("@hashgraph/sdk");
   const cfg = hederaConfigFromEnv();
+
+  // AccountBalanceQuery is a free query — no operator signature required.
+  // We still need a client pointed at the right network; forName handles that.
   const client = Client.forName(cfg.network);
-  client.setOperator(cfg.operatorId, cfg.operatorKey);
 
-  const query = new AccountBalanceQuery().setAccountId(AccountId.fromString(action.actorId));
-  const balance = await query.execute(client);
-  client.close();
+  try {
+    const query = new AccountBalanceQuery().setAccountId(AccountId.fromString(action.actorId));
+    const balance = await query.execute(client);
 
-  return {
-    accountId: action.actorId,
-    balanceHbar: balance.hbars.toBigNumber().toNumber(),
-    network: cfg.network,
-  };
+    return {
+      accountId: action.actorId,
+      balanceHbar: balance.hbars.toBigNumber().toNumber(),
+      network: cfg.network,
+    };
+  } finally {
+    client.close();
+  }
 }
 
 // ── Dry-run backend ───────────────────────────────────────────────────────────
