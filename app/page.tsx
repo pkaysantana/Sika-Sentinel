@@ -422,50 +422,97 @@ export default function Home() {
           <div className="space-y-2">
             {auditLog.map((msg) => {
               const b = getBadge(msg.policyResult.decision);
+              const ac = msg.agentContext;
               return (
                 <div
                   key={msg.correlationId}
-                  className="border border-gray-800 rounded p-3 text-xs space-y-1"
+                  className="border border-gray-800 rounded p-3 text-xs space-y-2"
                 >
+                  {/* ── Meta row: decision · seq · timestamp ── */}
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className={`px-2 py-0.5 rounded text-xs font-bold ${b.className}`}>
+                    <span className={`px-2 py-0.5 rounded font-bold ${b.className}`}>
                       {b.label}
                     </span>
-                    <span className="text-gray-500">#{msg.sequenceNumber}</span>
-                    <span className="text-gray-500">{new Date(msg.timestamp).toLocaleString()}</span>
-                    {msg.agentContext && (
+                    <span className="text-gray-600">#{msg.sequenceNumber}</span>
+                    <span className="text-gray-600">{new Date(msg.timestamp).toLocaleString()}</span>
+                  </div>
+
+                  {/* ── Evidence grid ── */}
+                  <div className="grid grid-cols-[6rem_1fr] gap-x-3 gap-y-0.5 font-mono">
+                    {/* What the user said */}
+                    <span className="text-gray-600">Instruction</span>
+                    <span className="text-gray-300 break-all">{msg.action.rawInstruction}</span>
+
+                    {/* What the agent interpreted */}
+                    <span className="text-gray-600">Intent</span>
+                    <span className="text-gray-300">{msg.action.actionType}</span>
+
+                    {msg.action.actionType === "HBAR_TRANSFER" && (
                       <>
-                        <span className="text-gray-600">·</span>
-                        <span className="font-mono text-indigo-400">{msg.agentContext.parserMode}</span>
-                        <span className={`font-mono ${
-                          msg.agentContext.confidence >= 0.8
-                            ? "text-green-500"
-                            : msg.agentContext.confidence >= 0.5
-                            ? "text-yellow-500"
-                            : "text-red-500"
-                        }`}>
-                          {Math.round(msg.agentContext.confidence * 100)}%
+                        <span className="text-gray-600">Amount</span>
+                        <span className="text-gray-300">
+                          {msg.action.amountHbar > 0 ? `${msg.action.amountHbar} HBAR` : "—"}
+                        </span>
+
+                        <span className="text-gray-600">Recipient</span>
+                        <span className="text-gray-300">
+                          {msg.action.recipientId || "—"}
                         </span>
                       </>
                     )}
+
+                    {ac && (
+                      <>
+                        <span className="text-gray-600">Parser</span>
+                        <span className="flex items-center gap-1.5">
+                          <span className="text-indigo-400">{ac.parserMode}</span>
+                          <span className={
+                            ac.confidence >= 0.8
+                              ? "text-green-500"
+                              : ac.confidence >= 0.5
+                              ? "text-yellow-500"
+                              : "text-red-500"
+                          }>
+                            {Math.round(ac.confidence * 100)}% confidence
+                          </span>
+                        </span>
+                      </>
+                    )}
+
+                    {/* What policy decided */}
+                    <span className="text-gray-600">Decision</span>
+                    <span className="text-gray-300">{msg.policyResult.decision}</span>
+
+                    {msg.policyResult.denialReason && (
+                      <>
+                        <span className="text-gray-600">Reason</span>
+                        <span className="text-gray-400">{msg.policyResult.denialReason}</span>
+                      </>
+                    )}
+
+                    {/* What executed */}
+                    {msg.txId && (
+                      <>
+                        <span className="text-gray-600">Tx</span>
+                        <a
+                          href={`${hashscanBase}/${msg.txId}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-400 hover:underline break-all"
+                        >
+                          {msg.txId}
+                        </a>
+                      </>
+                    )}
                   </div>
-                  <p className="text-gray-400 font-mono">{msg.action.rawInstruction}</p>
-                  {msg.agentContext?.parseWarnings && msg.agentContext.parseWarnings.length > 0 && (
-                    <ul className="space-y-0.5">
-                      {msg.agentContext.parseWarnings.map((w, i) => (
+
+                  {/* Parse warnings, if any */}
+                  {ac?.parseWarnings && ac.parseWarnings.length > 0 && (
+                    <ul className="space-y-0.5 pt-0.5 border-t border-gray-800">
+                      {ac.parseWarnings.map((w, i) => (
                         <li key={i} className="text-orange-500">⚡ {w}</li>
                       ))}
                     </ul>
-                  )}
-                  {msg.txId && (
-                    <a
-                      href={`${hashscanBase}/${msg.txId}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-400 hover:underline"
-                    >
-                      View on HashScan
-                    </a>
                   )}
                 </div>
               );
