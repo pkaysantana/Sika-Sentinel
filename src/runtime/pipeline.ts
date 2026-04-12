@@ -13,7 +13,6 @@ import { loadContext } from "../context/loader";
 import { evaluatePolicy } from "../policy/engine";
 import { executeHbarTransfer } from "../hedera/transfer";
 import { queryBalance } from "../hedera/balance";
-import { createScheduledTransfer } from "../hedera/schedule";
 import { record as recordAudit } from "../audit/trail";
 
 // ── Pipeline stage ────────────────────────────────────────────────────────────
@@ -166,6 +165,8 @@ export async function run(action: Action, agentContext?: AgentContext): Promise<
     // Create a scheduled transaction — funds are NOT released until a
     // second signer submits a ScheduleSignTransaction.
     try {
+      // Dynamic import to avoid static module resolution issues in Next.js
+      const { createScheduledTransfer } = await import("../hedera/schedule");
       const schedResult = await createScheduledTransfer(action);
       scheduleId = schedResult.scheduleId;
       stage = "SCHEDULED";
