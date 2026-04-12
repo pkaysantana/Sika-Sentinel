@@ -14,7 +14,7 @@ A human operator or automated agent submits a plain-English payment instruction.
 2. **Loads actor context** — role, transfer limits, approved recipients, treasury posture
 3. **Evaluates policy** deterministically across 7 rules (R001–R007)
 4. **Executes or schedules** the action on Hedera testnet if approved
-5. **Writes an audit event** to Hedera Consensus Service for every outcome — approved, denied, blocked, or scheduled
+5. **Writes an audit event** to Hedera Consensus Service for every outcome: approved, denied, blocked, or scheduled
 
 ---
 
@@ -72,7 +72,7 @@ Rules are evaluated in order with short-circuit logic. Policy evaluation is a pu
 
 When the policy engine returns `APPROVAL_REQUIRED`, Sika Sentinel creates a real Hedera `ScheduleCreateTransaction`. The inner transfer is registered on-network but funds are not released.
 
-A secondary signer can approve via `POST /api/schedule/approve`, which submits a `ScheduleSignTransaction` with the treasury key. Hedera automatically executes the inner transfer in the same consensus round and returns a `scheduledTransactionId` — the ID of the actual HBAR transfer, separate from the signing transaction.
+A secondary signer can approve via `POST /api/schedule/approve`, which submits a `ScheduleSignTransaction` with the treasury key. Hedera automatically executes the inner transfer in the same consensus round and returns a `scheduledTransactionId`: the ID of the actual HBAR transfer, separate from the signing transaction.
 
 Both the schedule creation and the approval are written as distinct HCS audit events, making the full approval lifecycle replayable.
 
@@ -85,14 +85,14 @@ Both the schedule creation and the approval are written as distinct HCS audit ev
 A private database audit log is only as trustworthy as the operator who controls it. Hedera Consensus Service gives three guarantees a private log cannot:
 
 - **Tamper-evidence by construction.** Each HCS message receives a consensus timestamp and sequence number assigned by the network. The ordered sequence cannot be rewritten after the fact.
-- **Decoupled write authority.** Even if the Sika Sentinel server is compromised, past audit events on HCS cannot be altered — only new (detectable) messages can be appended.
+- **Decoupled write authority.** Even if the Sika Sentinel server is compromised, past audit events on HCS cannot be altered: only new (detectable) messages can be appended.
 - **Verifiable replay.** Any third party can independently replay the full audit history from the Mirror Node using only the topic ID.
 
 ### Payload integrity check
 
 In addition to HCS's ledger-level ordering guarantees, each audit event carries a `payloadHash` field:
 
-- `payloadHash` is computed as SHA-256 over a **canonical JSON serialization** of the audit payload, with the `payloadHash` field itself **excluded** from the input. Keys are sorted recursively to ensure deterministic output regardless of field insertion order.
+- `payloadHash` is computed as SHA-256 over a **canonical JSON serialisation** of the audit payload, with the `payloadHash` field itself **excluded** from the input. Keys are sorted recursively to ensure deterministic output regardless of field insertion order.
 - On replay, the hash is recomputed over the fetched payload (excluding `payloadHash`) and compared to the stored value.
 - The replay UI shows `integrity: verified` (green) or `integrity: mismatch` (red) on each event.
 
