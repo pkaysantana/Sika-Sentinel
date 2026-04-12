@@ -398,11 +398,6 @@ export default function Home() {
               </a>
             </p>
           )}
-          {result.hcsTopicId && (
-            <p className="text-sm text-gray-400">
-              HCS sequence #{result.hcsSequenceNumber} on topic {result.hcsTopicId}
-            </p>
-          )}
           {(() => {
             const rules = result.policyResult?.evaluatedRules ?? [];
             return rules.length > 0 ? (
@@ -497,27 +492,96 @@ export default function Home() {
         </section>
       )}
 
-      {/* Audit replay */}
-      <section className="space-y-3">
-        <div className="flex items-center gap-4">
-          <h2 className="text-lg font-semibold text-gray-200">Audit Replay</h2>
-          <button
-            onClick={handleReplay}
-            disabled={replayLoading}
-            className="px-3 py-1 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 rounded text-sm"
-          >
-            {replayLoading ? "Loading..." : "Refresh"}
-          </button>
+      {/* ── Stage 4: Evidence Layer ───────────────────────────────────────────── */}
+      <section className="border border-violet-900 rounded-lg p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-500 font-mono select-none">STAGE 4</span>
+          <span className="text-sm font-bold text-violet-300">Evidence Layer</span>
+          <span className="text-xs text-gray-500 font-mono">· Hedera Consensus Service</span>
         </div>
-        {auditConfigured === null ? (
-          <p className="text-sm text-gray-500">Click Refresh to load the on-chain audit history.</p>
-        ) : !auditConfigured ? (
-          <p className="text-sm text-yellow-600">
-            HCS_TOPIC_ID not configured — run <code className="bg-gray-800 px-1 rounded">npm run create-topic</code> then set the ID in <code className="bg-gray-800 px-1 rounded">.env</code>.
+
+        {/* Per-submission audit summary — only shown after a run */}
+        {result && !result.parseResult?.clarificationMessage && (() => {
+          const decision = result.policyResult?.decision;
+          const auditWritten = !!result.hcsTopicId && result.hcsSequenceNumber >= 0;
+          const outcomeClass =
+            decision === "APPROVED"    ? "text-green-400"  :
+            decision === "DENIED"      ? "text-red-400"    :
+            decision === "APPROVAL_REQUIRED" ? "text-yellow-400" :
+            decision === "MANUAL_REVIEW"     ? "text-orange-400" :
+                                               "text-gray-400";
+
+          return (
+            <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs font-mono">
+              <span className="text-gray-500">Audit written</span>
+              <span className={auditWritten ? "text-green-400" : "text-gray-600"}>
+                {auditWritten ? "yes" : result.stage === "EXECUTED" ? "failed (non-fatal)" : "no"}
+              </span>
+
+              {result.hcsTopicId && (
+                <>
+                  <span className="text-gray-500">Topic</span>
+                  <span className="text-gray-300">{result.hcsTopicId}</span>
+
+                  <span className="text-gray-500">Sequence</span>
+                  <span className="text-gray-300">#{result.hcsSequenceNumber}</span>
+                </>
+              )}
+
+              {result.txId && (
+                <>
+                  <span className="text-gray-500">Tx</span>
+                  <a
+                    href={`${hashscanBase}/${result.txId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-400 hover:underline break-all"
+                  >
+                    {result.txId}
+                  </a>
+                </>
+              )}
+
+              <span className="text-gray-500">Outcome</span>
+              <span className={outcomeClass}>{decision ?? "—"}</span>
+            </div>
+          );
+        })()}
+
+        {/* PARSE_BLOCKED path — no audit event written */}
+        {result?.parseResult?.clarificationMessage && (
+          <p className="text-xs font-mono text-gray-600">
+            No audit event written — instruction did not reach the pipeline.
           </p>
-        ) : auditLog.length === 0 ? (
-          <p className="text-sm text-gray-500">No audit events found yet on this topic.</p>
-        ) : (
+        )}
+
+        {/* On-chain replay history */}
+        <details className="group" open={auditLog.length > 0}>
+          <summary className="cursor-pointer flex items-center gap-2 text-xs text-gray-500 hover:text-gray-300 list-none">
+            <span className="font-mono">▶</span>
+            <span className="font-semibold">On-chain replay history</span>
+            <button
+              type="button"
+              onClick={(e) => { e.preventDefault(); handleReplay(); }}
+              disabled={replayLoading}
+              className="ml-2 px-2 py-0.5 bg-gray-800 border border-gray-700 rounded hover:bg-gray-700 disabled:opacity-50 text-xs"
+            >
+              {replayLoading ? "Loading…" : "Refresh"}
+            </button>
+          </summary>
+
+          <div className="mt-3">
+            {auditConfigured === null ? (
+              <p className="text-xs text-gray-600">Click Refresh to load the on-chain audit history.</p>
+            ) : !auditConfigured ? (
+              <p className="text-xs text-yellow-600">
+                HCS_TOPIC_ID not configured — run{" "}
+                <code className="bg-gray-800 px-1 rounded">npm run create-topic</code>{" "}
+                then set the ID in <code className="bg-gray-800 px-1 rounded">.env</code>.
+              </p>
+            ) : auditLog.length === 0 ? (
+              <p className="text-xs text-gray-600">No audit events found yet on this topic.</p>
+            ) : (
           <div className="space-y-2">
             {auditLog.map((msg) => {
               const b = getBadge(msg.policyResult.decision);
@@ -617,7 +681,9 @@ export default function Home() {
               );
             })}
           </div>
-        )}
+            )}
+          </div>
+        </details>
       </section>
     </main>
   );
