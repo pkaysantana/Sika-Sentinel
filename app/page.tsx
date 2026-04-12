@@ -118,6 +118,17 @@ export default function Home() {
   const [replayLoading, setReplayLoading] = useState(false);
   const [error, setError] = useState("");
 
+  // Secondary approval state
+  const [approvalLoading, setApprovalLoading] = useState(false);
+  const [approvalResult, setApprovalResult] = useState<{
+    status: string;
+    signTxId: string;
+    scheduleId: string;
+    hcsTopicId?: string;
+    hcsSequenceNumber?: number;
+  } | null>(null);
+  const [approvalError, setApprovalError] = useState("");
+
   // Whitelist panel state
   const [whitelist, setWhitelist] = useState<string[] | null>(null);
   const [whitelistLoading, setWhitelistLoading] = useState(false);
@@ -130,6 +141,8 @@ export default function Home() {
     setLoading(true);
     setError("");
     setResult(null);
+    setApprovalResult(null);
+    setApprovalError("");
 
     try {
       const res = await fetch("/api/run", {
@@ -196,6 +209,26 @@ export default function Home() {
       setWhitelistError(err instanceof Error ? err.message : String(err));
     } finally {
       setWhitelistLoading(false);
+    }
+  }
+
+  async function handleApproveSchedule(schedId: string) {
+    setApprovalLoading(true);
+    setApprovalError("");
+    setApprovalResult(null);
+    try {
+      const res = await fetch("/api/schedule/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scheduleId: schedId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Approval failed");
+      setApprovalResult(data);
+    } catch (err) {
+      setApprovalError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setApprovalLoading(false);
     }
   }
 
@@ -646,8 +679,27 @@ export default function Home() {
                     {result.scheduleId}
                   </a>
 
-                  <span className="text-gray-500">Next step</span>
-                  <span className="text-yellow-300 whitespace-normal">Awaiting secondary signature via ScheduleSignTransaction</span>
+                  {!approvalResult ? (
+                    <>
+                      <span className="text-gray-500">Next step</span>
+                      <span className="text-yellow-300 whitespace-normal">Awaiting secondary signature via ScheduleSignTransaction</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-gray-500">Approval</span>
+                      <span className="text-green-400">{approvalResult.status}</span>
+
+                      <span className="text-gray-500">Sign Tx</span>
+                      <a
+                        href={`${hashscanBase}/${approvalResult.signTxId}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-400 hover:underline break-all"
+                      >
+                        {approvalResult.signTxId}
+                      </a>
+                    </>
+                  )}
                 </>
               )}
 
@@ -659,6 +711,36 @@ export default function Home() {
                 </>
               )}
             </div>
+
+            {/* Secondary approval control — only for pending scheduled transactions */}
+            {result.scheduleId && !approvalResult && (
+              <div className="flex items-center gap-3 pt-2 border-t border-gray-800">
+                <button
+                  type="button"
+                  onClick={() => handleApproveSchedule(result.scheduleId)}
+                  disabled={approvalLoading}
+                  className="px-3 py-1.5 bg-yellow-700 hover:bg-yellow-600 disabled:opacity-50 rounded text-xs font-medium text-yellow-100"
+                >
+                  {approvalLoading ? "Approving…" : "Approve scheduled transaction"}
+                </button>
+                <span className="text-xs text-gray-600">Submit secondary signature to release funds</span>
+              </div>
+            )}
+
+            {approvalError && (
+              <p className="text-xs text-red-400 pt-1">{approvalError}</p>
+            )}
+
+            {approvalResult && (
+              <div className="flex items-center gap-2 pt-2 border-t border-gray-800">
+                <span className="text-xs px-2 py-0.5 rounded bg-green-900 text-green-300 font-mono font-bold">
+                  FUNDS RELEASED
+                </span>
+                <span className="text-xs text-gray-500">
+                  Schedule approved — transfer executed on Hedera
+                </span>
+              </div>
+            )}
 
             {/* Evaluated rules — collapsible, only when rules were actually run */}
             {rules.length > 0 && (
@@ -753,6 +835,30 @@ export default function Home() {
                   >
                     {result.scheduleId}
                   </a>
+                </>
+              )}
+
+              {approvalResult && (
+                <>
+                  <span className="text-gray-500">Approval</span>
+                  <span className="text-green-400">{approvalResult.status}</span>
+
+                  <span className="text-gray-500">Sign Tx</span>
+                  <a
+                    href={`${hashscanBase}/${approvalResult.signTxId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-400 hover:underline break-all"
+                  >
+                    {approvalResult.signTxId}
+                  </a>
+
+                  {approvalResult.hcsTopicId && (
+                    <>
+                      <span className="text-gray-500">Approval audit</span>
+                      <span className="text-gray-300">#{approvalResult.hcsSequenceNumber}</span>
+                    </>
+                  )}
                 </>
               )}
             </div>
