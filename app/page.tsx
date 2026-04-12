@@ -422,7 +422,7 @@ export default function Home() {
               )}
               {isBlocked && (
                 <span className="ml-auto text-xs px-2 py-0.5 rounded bg-gray-800 text-gray-500 font-mono">
-                  NOT REACHED
+                  SKIPPED
                 </span>
               )}
             </div>
@@ -433,7 +433,7 @@ export default function Home() {
               {/* Policy decision row */}
               <span className="text-gray-500">Decision</span>
               {isBlocked ? (
-                <span className="text-gray-600">skipped — parse blocked</span>
+                <span className="text-gray-600">not evaluated</span>
               ) : (
                 <span className={
                   decision === "APPROVED"          ? "text-green-400"  :
@@ -454,18 +454,18 @@ export default function Home() {
                 </>
               )}
 
-              {/* Denial detail — human explanation */}
-              {!isBlocked && pr?.denialDetail && (
+              {/* Denial detail — human explanation, only for non-approved policy outcomes */}
+              {!isBlocked && pr?.denialDetail && decision !== "APPROVED" && (
                 <>
-                  <span className="text-gray-500">Detail</span>
+                  <span className="text-gray-500">Explanation</span>
                   <span className="text-gray-400 whitespace-normal">{pr.denialDetail}</span>
                 </>
               )}
 
-              {/* Parse-blocked reason */}
+              {/* Parse-blocked clarification — from the Intent Agent, not a policy denial */}
               {isBlocked && result.error && (
                 <>
-                  <span className="text-gray-500">Reason</span>
+                  <span className="text-gray-500">Clarification</span>
                   <span className="text-amber-400 whitespace-normal">{result.error}</span>
                 </>
               )}
@@ -490,7 +490,7 @@ export default function Home() {
               )}
 
               {/* Balance check result */}
-              {result.balanceHbar !== null && result.balanceHbar !== undefined && (
+              {result.balanceHbar !== null && (
                 <>
                   <span className="text-gray-500">Balance</span>
                   <span className="text-green-300 font-semibold">{result.balanceHbar} HBAR</span>
@@ -529,8 +529,12 @@ export default function Home() {
           const decision = result.policyResult?.decision;
           const auditWritten = !!result.hcsTopicId && result.hcsSequenceNumber >= 0;
           // A non-fatal HCS failure: pipeline ran past policy but topic is still empty
-          const auditFailed = !auditWritten && !isBlocked &&
-            result.stage !== "POLICY_EVALUATED" && result.stage !== "ERROR";
+          // Non-fatal HCS failure: pipeline reached the audit step but the write
+          // failed. PARSE_BLOCKED and POLICY_EVALUATED never attempt an audit write.
+          const auditFailed = !auditWritten &&
+            result.stage !== "PARSE_BLOCKED" &&
+            result.stage !== "POLICY_EVALUATED" &&
+            result.stage !== "ERROR";
 
           const displayOutcome = isBlocked ? "PARSE_BLOCKED" : (decision ?? "—");
           const outcomeClass =
@@ -682,7 +686,7 @@ export default function Home() {
 
                     {isParseBlocked && msg.policyResult.denialDetail && (
                       <>
-                        <span className="text-gray-600">Reason</span>
+                        <span className="text-gray-600">Clarification</span>
                         <span className="text-amber-400 whitespace-normal">{msg.policyResult.denialDetail}</span>
                       </>
                     )}

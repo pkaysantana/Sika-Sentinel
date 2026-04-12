@@ -10,19 +10,43 @@ import pytest
 from src.schemas.action import ActionType
 
 
-@pytest.mark.skip(reason="parser not yet implemented")
-def test_parses_basic_transfer():
+def _parse_or_skip(instruction: str, actor_id: str):
+    """
+    Helper to execute parse_instruction if implemented,
+    otherwise skip the test smoothly for scaffolding.
+    """
     from src.agents.intent_parser import parse_instruction
-    action = parse_instruction("Send 5 HBAR to approved partner wallet 0.0.800", "0.0.100")
-    assert action.action_type == ActionType.HBAR_TRANSFER
-    assert action.amount_hbar == 5.0
-    assert action.recipient_id == "0.0.800"
-    assert action.actor_id == "0.0.100"
-    assert action.raw_instruction != ""
+    try:
+        return parse_instruction(instruction, actor_id)
+    except NotImplementedError:
+        pytest.skip("parser not yet implemented")
 
 
-@pytest.mark.skip(reason="parser not yet implemented")
-def test_parse_failure_raises():
-    from src.agents.intent_parser import parse_instruction
+def test_missing_recipient():
+    with pytest.raises(ValueError, match="missing.*recipient|vague|specify"):
+        _parse_or_skip("Send 5 HBAR", "0.0.100")
+
+
+def test_missing_amount():
+    with pytest.raises(ValueError, match="missing.*amount|vague|specify"):
+        _parse_or_skip("Send to 0.0.800", "0.0.100")
+
+
+def test_vague_transfer_instruction():
+    with pytest.raises(ValueError, match="vague|specify"):
+        _parse_or_skip("send money", "0.0.100")
+
+
+def test_unsupported_instruction():
     with pytest.raises(ValueError):
-        parse_instruction("do something vague", "0.0.100")
+        _parse_or_skip("stake this account to node 4", "0.0.100")
+
+
+def test_valid_transfer_proceeds():
+    action = _parse_or_skip("Send 5 HBAR to 0.0.800", "0.0.100")
+    assert action.action_type == ActionType.HBAR_TRANSFER
+
+
+def test_valid_balance_check_proceeds():
+    action = _parse_or_skip("What is my balance?", "0.0.100")
+    assert action.action_type == ActionType.CHECK_BALANCE
