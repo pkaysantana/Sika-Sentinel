@@ -301,57 +301,87 @@ export default function Home() {
       )}
 
       {/* ── Stage 2: Context Engine ───────────────────────────────────────────── */}
-      {result?.context && !result.parseResult?.clarificationMessage && (() => {
-        const ctx = result.context as ContextSnapshot;
-        const recipientId = result.action.recipientId;
-        const recipientApproved =
-          !ctx.enforceRecipientAllowlist ||
-          (!!recipientId && ctx.approvedRecipients.includes(recipientId));
+      {result && (() => {
+        const ctx = result.context as ContextSnapshot | null;
+        const isBlocked = result.stage === "PARSE_BLOCKED";
+        const isTransfer = result.action.actionType === "HBAR_TRANSFER";
 
-        const treasuryClass =
-          ctx.treasuryPosture === "NORMAL"
-            ? "text-green-400"
-            : ctx.treasuryPosture === "RESTRICTED"
-            ? "text-yellow-400"
-            : "text-red-400";
+        // Allowlist evaluation — only meaningful for transfers with a context
+        const recipientId = result.action.recipientId;
+        type AllowlistStatus = "approved" | "not on list" | "not extracted" | "not enforced" | "n/a";
+        let allowlistStatus: AllowlistStatus = "n/a";
+        let allowlistOk = true;
+        if (ctx && isTransfer) {
+          if (!ctx.enforceRecipientAllowlist) {
+            allowlistStatus = "not enforced";
+          } else if (!recipientId) {
+            allowlistStatus = "not extracted";
+            allowlistOk = false;
+          } else if (ctx.approvedRecipients.includes(recipientId)) {
+            allowlistStatus = "approved";
+          } else {
+            allowlistStatus = "not on list";
+            allowlistOk = false;
+          }
+        }
+
+        const treasuryClass = !ctx ? "text-gray-600" :
+          ctx.treasuryPosture === "NORMAL"      ? "text-green-400" :
+          ctx.treasuryPosture === "RESTRICTED"  ? "text-yellow-400" :
+                                                  "text-red-400";
 
         return (
           <section className="border border-teal-900 rounded-lg p-4 space-y-3">
             <div className="flex items-center gap-2">
               <span className="text-xs text-gray-500 font-mono select-none">STAGE 2</span>
               <span className="text-sm font-bold text-teal-300">Context Engine</span>
-              <span className="ml-auto text-xs px-2 py-0.5 rounded bg-teal-950 text-teal-400 font-mono">LOADED</span>
-            </div>
-
-            <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs font-mono">
-              <span className="text-gray-500">Actor</span>
-              <span className="text-gray-200">{ctx.actorId}</span>
-
-              <span className="text-gray-500">Role</span>
-              <span className="text-gray-200">{ctx.actorRole}</span>
-
-              <span className="text-gray-500">Transfer limit</span>
-              <span className="text-gray-200">{ctx.amountThresholdHbar} HBAR</span>
-
-              <span className="text-gray-500">Treasury</span>
-              <span className={treasuryClass}>{ctx.treasuryPosture}</span>
-
-              {result.action.actionType === "HBAR_TRANSFER" && (
-                <>
-                  <span className="text-gray-500">Recipient</span>
-                  <span className="text-gray-200">{recipientId || "—"}</span>
-
-                  <span className="text-gray-500">Allowlist</span>
-                  <span className={recipientApproved ? "text-green-400" : "text-red-400"}>
-                    {ctx.enforceRecipientAllowlist
-                      ? recipientApproved
-                        ? "approved"
-                        : "not on list"
-                      : "not enforced"}
-                  </span>
-                </>
+              {isBlocked ? (
+                <span className="ml-auto text-xs px-2 py-0.5 rounded bg-gray-800 text-gray-500 font-mono">
+                  NOT LOADED
+                </span>
+              ) : (
+                <span className="ml-auto text-xs px-2 py-0.5 rounded bg-teal-950 text-teal-400 font-mono">
+                  LOADED
+                </span>
               )}
             </div>
+
+            {isBlocked ? (
+              <p className="text-xs font-mono text-gray-600">
+                Context not loaded — instruction was blocked before the pipeline.
+              </p>
+            ) : ctx && (
+              <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs font-mono">
+                <span className="text-gray-500">Actor</span>
+                <span className="text-gray-200">{ctx.actorId}</span>
+
+                <span className="text-gray-500">Role</span>
+                <span className="text-gray-200">{ctx.actorRole}</span>
+
+                <span className="text-gray-500">Partner</span>
+                <span className="text-gray-200">{ctx.partnerId}</span>
+
+                <span className="text-gray-500">Treasury</span>
+                <span className={treasuryClass}>{ctx.treasuryPosture}</span>
+
+                {isTransfer && (
+                  <>
+                    <span className="text-gray-500">Transfer limit</span>
+                    <span className="text-gray-200">{ctx.amountThresholdHbar} HBAR</span>
+
+                    <span className="text-gray-500">Recipient</span>
+                    <span className={recipientId ? "text-gray-200" : "text-gray-600"}>
+                      {recipientId || "not extracted"}
+                    </span>
+
+                    <span className="text-gray-500">Allowlist</span>
+                    <span className={allowlistOk ? "text-green-400" : "text-red-400"}>
+                      {allowlistStatus}
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
           </section>
         );
       })()}
