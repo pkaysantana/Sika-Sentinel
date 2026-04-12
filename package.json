@@ -17,6 +17,8 @@
     "@hashgraph/sdk": "^2.50.0",
     "@langchain/core": "^0.3.0",
     "@langchain/openai": "^0.3.0",
+    "@splinetool/react-spline": "^4.1.0",
+    "@splinetool/runtime": "^1.12.81",
     "dotenv": "^17.4.1",
     "langchain": "^0.3.0",
     "next": "14.2.20",

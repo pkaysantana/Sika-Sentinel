@@ -33,6 +33,7 @@ export async function record(
     scheduleId,
     topicId: "",
     sequenceNumber: -1,
+    payloadHash: "",
     ...(agentContext !== undefined ? { agentContext } : {}),
   };
 

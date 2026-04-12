@@ -1,5 +1,13 @@
 import type { Metadata } from "next";
+import { Roboto } from "next/font/google";
 import "./globals.css";
+
+const roboto = Roboto({
+  subsets: ["latin"],
+  weight: ["300", "400", "500", "700"],
+  variable: "--font-roboto",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Sika Sentinel",
@@ -12,8 +20,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body className="bg-gray-950 text-gray-100 min-h-screen font-mono">
+    <html lang="en" className={roboto.variable}>
+      <body className="bg-[#000000] text-white min-h-screen font-roboto antialiased">
         {children}
       </body>
     </html>

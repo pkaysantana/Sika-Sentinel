@@ -194,8 +194,8 @@ function extractHeuristic(
   const intent = detectIntent(rawInstruction);
 
   // Extract all account IDs
-  const accountMatches = [...rawInstruction.matchAll(ACCOUNT_RE)].map((m) => m[1]);
-  const uniqueAccounts = [...new Set(accountMatches)];
+  const accountMatches = Array.from(rawInstruction.matchAll(ACCOUNT_RE)).map((m) => m[1]);
+  const uniqueAccounts = Array.from(new Set(accountMatches));
 
   // Recipient = first account that isn't the actor
   const extractedRecipient = uniqueAccounts.find((a) => a !== actorId) ?? null;
@@ -328,7 +328,7 @@ async function extractViaLlm(
   });
 
   // Mirror what heuristic found for workflowContext
-  const accounts = [...rawInstruction.matchAll(ACCOUNT_RE)].map((m) => m[1]);
+  const accounts = Array.from(rawInstruction.matchAll(ACCOUNT_RE)).map((m) => m[1]);
   const extractedAmount = llmResult.amountHbar || null;
   const extractedRecipient = llmResult.recipientId || null;
 
@@ -358,7 +358,7 @@ async function extractViaLlm(
       detectedIntent: llmResult.actionType,
       extractedAmount,
       extractedRecipient,
-      extractedAccounts: [...new Set(accounts)],
+      extractedAccounts: Array.from(new Set(accounts)),
     },
   };
 }

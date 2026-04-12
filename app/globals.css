@@ -1,3 +1,184 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ── Roboto font utility ─────────────────────────────────────────────────── */
+@layer base {
+  :root {
+    --font-roboto: "Roboto", sans-serif;
+    --hd-purple:     #b47aff;
+    --hd-purple-d:   #8259ef;
+    --hd-cobalt:     #2d84eb;
+    --hd-cobalt-l:   #5aa6ff;
+    --hd-bg:         #000000;
+    --hd-surface:    #0c0a1a;
+    --hd-surface-2:  #141128;
+    --hd-border:     rgba(255, 255, 255, 0.08);
+    --hd-border-acc: rgba(180, 122, 255, 0.25);
+  }
+
+  * {
+    font-family: var(--font-roboto), sans-serif;
+  }
+
+  body {
+    background-color: var(--hd-bg);
+    color: #ffffff;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+/* ── Hedera-dark Swift components ────────────────────────────────────────── */
+@layer components {
+
+  /* Base swift button */
+  .swift-btn {
+    @apply inline-flex items-center justify-center
+           rounded-full font-medium
+           transition-all duration-150 ease-out
+           active:scale-95 active:brightness-90
+           hover:brightness-110
+           cursor-pointer select-none;
+    -webkit-tap-highlight-color: transparent;
+    will-change: transform;
+  }
+
+  /* Primary — purple-filled pill */
+  .swift-btn-primary {
+    @apply swift-btn
+           px-5 py-2.5 text-sm text-white;
+    background: linear-gradient(135deg, var(--hd-purple-d) 0%, var(--hd-purple) 100%);
+    box-shadow: 0 0 0 1px rgba(180,122,255,0.3), 0 4px 16px rgba(130,89,239,0.35);
+  }
+  .swift-btn-primary:hover {
+    box-shadow: 0 0 0 1px rgba(180,122,255,0.5), 0 6px 24px rgba(130,89,239,0.5);
+  }
+
+  /* Secondary — ghost with purple border */
+  .swift-btn-secondary {
+    @apply swift-btn
+           bg-transparent text-white
+           border px-5 py-2.5 text-sm;
+    border-color: var(--hd-border-acc);
+  }
+  .swift-btn-secondary:hover {
+    background: rgba(180,122,255,0.08);
+    border-color: rgba(180,122,255,0.45);
+  }
+
+  /* Accent — cobalt */
+  .swift-btn-accent {
+    @apply swift-btn
+           px-5 py-2.5 text-sm text-white;
+    background: linear-gradient(135deg, var(--hd-cobalt) 0%, var(--hd-cobalt-l) 100%);
+    box-shadow: 0 0 0 1px rgba(45,132,235,0.3), 0 4px 16px rgba(45,132,235,0.3);
+  }
+
+  /* Danger */
+  .swift-btn-danger {
+    @apply swift-btn
+           bg-red-600 text-white
+           px-5 py-2.5 text-sm
+           hover:bg-red-500 active:bg-red-700;
+  }
+
+  /* Warning — amber */
+  .swift-btn-warning {
+    @apply swift-btn
+           px-5 py-2.5 text-sm;
+    background: linear-gradient(135deg, #b45309 0%, #f59e0b 100%);
+    color: #fff;
+    box-shadow: 0 0 0 1px rgba(245,158,11,0.3);
+  }
+
+  /* Disabled state */
+  .swift-btn:disabled,
+  .swift-btn[disabled] {
+    @apply opacity-40 cursor-not-allowed
+           active:scale-100 active:brightness-100 hover:brightness-100;
+  }
+
+  /* Quick-fill chip */
+  .swift-chip {
+    @apply flex items-center gap-2 text-left
+           px-3 py-2 rounded-xl
+           transition-all duration-100 ease-out
+           active:scale-[0.98]
+           cursor-pointer select-none;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--hd-border);
+    -webkit-tap-highlight-color: transparent;
+  }
+  .swift-chip:hover {
+    background: rgba(180,122,255,0.07);
+    border-color: var(--hd-border-acc);
+  }
+
+  /* Card / section panel */
+  .swift-card {
+    @apply rounded-2xl transition-shadow duration-200;
+    background: var(--hd-surface);
+    border: 1px solid var(--hd-border);
+    box-shadow: var(--tw-shadow, 0 0 0 1px rgba(180,122,255,0.08));
+  }
+  .swift-card:hover {
+    border-color: rgba(180,122,255,0.18);
+  }
+
+  /* Input field */
+  .swift-input {
+    @apply w-full rounded-xl px-4 py-2.5 text-sm text-white
+           placeholder-gray-600
+           transition-all duration-150
+           focus:outline-none;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--hd-border);
+  }
+  .swift-input:hover {
+    border-color: rgba(180,122,255,0.25);
+  }
+  .swift-input:focus {
+    border-color: var(--hd-purple);
+    box-shadow: 0 0 0 3px rgba(180,122,255,0.15);
+  }
+
+  /* Select field */
+  .swift-select {
+    @apply swift-input appearance-none cursor-pointer;
+  }
+
+  /* Badge / pill */
+  .swift-badge {
+    @apply inline-flex items-center
+           px-2.5 py-0.5 rounded-full
+           text-xs font-medium
+           transition-all duration-100;
+  }
+
+  /* Gradient text utility */
+  .hd-gradient-text {
+    background: linear-gradient(90deg, var(--hd-purple) 0%, var(--hd-cobalt-l) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+}
+
+/* ── Scrollbar styling (dark) ────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--hd-surface);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(180,122,255,0.3);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(180,122,255,0.5);
+}

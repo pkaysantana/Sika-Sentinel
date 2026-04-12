@@ -27,10 +27,10 @@ export const R006 = "R006:AMOUNT_WITHIN_LIMIT";
 export const R007 = "R007:TREASURY_NOT_RESTRICTED";
 
 // Action types that move funds — trigger the full transfer rule set
-const TRANSFER_TYPES: Set<ActionType> = new Set(["HBAR_TRANSFER"]);
+const TRANSFER_TYPES: Set<ActionType> = new Set<ActionType>(["HBAR_TRANSFER"]);
 
 // Roles permitted to perform any action
-const AUTHORISED_ROLES: Set<ActorRole> = new Set(["OPERATOR", "PARTNER", "ADMIN"]);
+const AUTHORISED_ROLES: Set<ActorRole> = new Set<ActorRole>(["OPERATOR", "PARTNER", "ADMIN"]);
 
 // ── Individual rule checkers ──────────────────────────────────────────────────
 // Each returns null (rule passes) or PolicyResult (rule fires → short-circuit).
