@@ -10,7 +10,7 @@
       "role": "OPERATOR",
       "partner_id": "sika-operator",
       "amount_threshold_hbar": 100.0,
-      "approved_recipients": ["0.0.8570146"],
+      "approved_recipients": ["0.0.8570146", "0.0.8598115"],
       "enforce_recipient_allowlist": true
     }
   }
