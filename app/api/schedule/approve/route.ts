@@ -56,11 +56,16 @@ export async function POST(req: NextRequest) {
       memo: "",
     };
 
+    // The secondary-approval path does not re-run the policy engine — the
+    // original decision was already pinned to a catalogue version and lives
+    // on the scheduled action's audit trail. This synthetic result records
+    // the signing event itself, so policyVersion is intentionally blank.
     const approvalPolicyResult = {
       decision: "APPROVED" as const,
       denialReason: null,
       denialDetail: `Schedule ${scheduleId.trim()} approved via ScheduleSignTransaction`,
       evaluatedRules: [] as string[],
+      policyVersion: "",
     };
 
     let hcsTopicId = "";
