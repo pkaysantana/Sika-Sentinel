@@ -8,6 +8,7 @@
 import { z } from "zod";
 import { ActionSchema } from "./action";
 import { PolicyResultSchema } from "./policy";
+import { CallerReferenceSchema } from "../auth/schemas";
 
 /**
  * Parse-agent context captured at instruction time.
@@ -45,6 +46,13 @@ export const AuditMessageSchema = z.object({
    * so pre-catalogue events still parse.
    */
   policyVersion: z.string().default(""),
+  /**
+   * Authenticated caller that submitted the request, distinct from the
+   * on-chain actor. `null` for events produced before 1B (pre-auth) or by
+   * internal pipelines that have no HTTP surface. Only `id` and `kind` are
+   * frozen into the audit — permissions are a live store property.
+   */
+  caller: CallerReferenceSchema,
 });
 
 export type AuditMessage = z.infer<typeof AuditMessageSchema>;
