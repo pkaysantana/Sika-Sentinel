@@ -23,3 +23,7 @@ coverage/
 # OS
 .DS_Store
 Thumbs.db
+
+# Runtime state — audit outbox, caller store, and local projections live here.
+# Durable, environment-specific, may contain secrets.
+data/
