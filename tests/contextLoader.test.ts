@@ -192,29 +192,29 @@ describe("loadContext — JSON file backend", () => {
 // ── addApprovedRecipient edge cases ───────────────────────────────────────────
 
 describe("addApprovedRecipient — deduplication", () => {
-  it("adding a recipient that is already present is a no-op", () => {
+  it("adding a recipient that is already present is a no-op", async () => {
     // 0.0.800 is already in 0.0.100's approved list in the fallback store
-    addApprovedRecipient("0.0.100", "0.0.800");
+    await addApprovedRecipient("0.0.100", "0.0.800");
     const recipients = getApprovedRecipients("0.0.100");
     expect(recipients.filter((r) => r === "0.0.800")).toHaveLength(1);
   });
 
-  it("adding a new recipient appends it exactly once", () => {
-    addApprovedRecipient("0.0.100", "0.0.9999");
+  it("adding a new recipient appends it exactly once", async () => {
+    await addApprovedRecipient("0.0.100", "0.0.9999");
     const recipients = getApprovedRecipients("0.0.100");
     expect(recipients).toContain("0.0.9999");
     expect(recipients.filter((r) => r === "0.0.9999")).toHaveLength(1);
   });
 
-  it("adding the same new recipient twice still results in one entry", () => {
-    addApprovedRecipient("0.0.100", "0.0.8888");
-    addApprovedRecipient("0.0.100", "0.0.8888");
+  it("adding the same new recipient twice still results in one entry", async () => {
+    await addApprovedRecipient("0.0.100", "0.0.8888");
+    await addApprovedRecipient("0.0.100", "0.0.8888");
     const recipients = getApprovedRecipients("0.0.100");
     expect(recipients.filter((r) => r === "0.0.8888")).toHaveLength(1);
   });
 
-  it("throws for unknown actor", () => {
-    expect(() => addApprovedRecipient("0.0.999", "0.0.800")).toThrow("0.0.999");
+  it("throws for unknown actor", async () => {
+    await expect(addApprovedRecipient("0.0.999", "0.0.800")).rejects.toThrow("0.0.999");
   });
 });
 
@@ -236,14 +236,14 @@ describe("addApprovedRecipient — file write failure is non-fatal", () => {
     reloadStore();
   });
 
-  it("in-memory state is updated even when the store file does not exist", () => {
+  it("in-memory state is updated even when the store file does not exist", async () => {
     // Point to a path that cannot be written (nonexistent dir) so the
-    // writeFileSync inside addApprovedRecipient will throw internally.
+    // writeFile inside addApprovedRecipient will fail internally.
     process.env.CONTEXT_STORE_PATH = path.join(tmpDir, "nonexistent", "ctx.json");
     reloadStore();
 
     // Should not throw despite the file path being unwritable
-    expect(() => addApprovedRecipient("0.0.100", "0.0.7777")).not.toThrow();
+    await expect(addApprovedRecipient("0.0.100", "0.0.7777")).resolves.toBeUndefined();
 
     // In-memory state must still reflect the addition
     const recipients = getApprovedRecipients("0.0.100");
