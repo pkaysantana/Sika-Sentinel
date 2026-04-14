@@ -200,12 +200,16 @@ export function getTreasuryPosture(): TreasuryPosture {
 /**
  * Add a recipient account ID to the approved list for the given actor.
  * Persists the change to the store file so it survives process restarts.
- * No-ops silently if the recipient is already present.
  * Uses non-blocking async file writes via fs.promises.
  *
+ * @returns `{ alreadyExisted: true }` when the recipient was already present (no-op),
+ *          `{ alreadyExisted: false }` when it was newly added.
  * @throws {Error} If actorId is not registered.
  */
-export async function addApprovedRecipient(actorId: string, recipientId: string): Promise<void> {
+export async function addApprovedRecipient(
+  actorId: string,
+  recipientId: string
+): Promise<{ alreadyExisted: boolean }> {
   const store = loadStore();
 
   if (!(actorId in store.actors)) {
@@ -216,7 +220,7 @@ export async function addApprovedRecipient(actorId: string, recipientId: string)
   }
 
   const actor = store.actors[actorId];
-  if (actor.approved_recipients.includes(recipientId)) return;
+  if (actor.approved_recipients.includes(recipientId)) return { alreadyExisted: true };
 
   actor.approved_recipients.push(recipientId);
 
@@ -235,6 +239,8 @@ export async function addApprovedRecipient(actorId: string, recipientId: string)
       `Failed to persist approved recipients for actor '${actorId}' to ${storePath}: ${err}`
     );
   }
+
+  return { alreadyExisted: false };
 }
 
 /**

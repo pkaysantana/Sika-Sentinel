@@ -243,7 +243,7 @@ describe("addApprovedRecipient — file write failure is non-fatal", () => {
     reloadStore();
 
     // Should not throw despite the file path being unwritable
-    await expect(addApprovedRecipient("0.0.100", "0.0.7777")).resolves.toBeUndefined();
+    await expect(addApprovedRecipient("0.0.100", "0.0.7777")).resolves.toMatchObject({ alreadyExisted: false });
 
     // In-memory state must still reflect the addition
     const recipients = getApprovedRecipients("0.0.100");
