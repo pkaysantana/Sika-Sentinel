@@ -1,0 +1,73 @@
+{
+  "schemaVersion": "1.0",
+  "name": "sika-sentinel-default",
+  "description": "Default Sika Sentinel policy catalogue — mirrors the original hardcoded 7-rule set. Behaviour-preserving migration of the pre-catalogue engine.",
+  "rules": [
+    {
+      "id": "R001",
+      "name": "RECIPIENT_PRESENT",
+      "description": "Transfer actions must name a non-blank recipient account.",
+      "appliesTo": ["HBAR_TRANSFER"],
+      "check": "RECIPIENT_PRESENT",
+      "decision": "DENIED",
+      "denialReason": "MISSING_RECIPIENT"
+    },
+    {
+      "id": "R002",
+      "name": "AMOUNT_VALID",
+      "description": "Transfer amount must be strictly greater than zero.",
+      "appliesTo": ["HBAR_TRANSFER"],
+      "check": "AMOUNT_VALID",
+      "decision": "DENIED",
+      "denialReason": "INVALID_AMOUNT"
+    },
+    {
+      "id": "R003",
+      "name": "ACTOR_AUTHORISED",
+      "description": "Actor role must be one of the permitted roles for any action.",
+      "appliesTo": ["HBAR_TRANSFER", "CHECK_BALANCE"],
+      "check": "ACTOR_AUTHORISED",
+      "decision": "DENIED",
+      "denialReason": "ACTOR_NOT_AUTHORISED",
+      "params": {
+        "permittedRoles": ["OPERATOR", "PARTNER", "ADMIN"]
+      }
+    },
+    {
+      "id": "R004",
+      "name": "TREASURY_NOT_FROZEN",
+      "description": "Transfers are blocked when the treasury posture is FROZEN.",
+      "appliesTo": ["HBAR_TRANSFER"],
+      "check": "TREASURY_NOT_FROZEN",
+      "decision": "DENIED",
+      "denialReason": "TREASURY_FROZEN"
+    },
+    {
+      "id": "R005",
+      "name": "RECIPIENT_APPROVED",
+      "description": "Recipient must be on the actor's approved allowlist when enforcement is enabled.",
+      "appliesTo": ["HBAR_TRANSFER"],
+      "check": "RECIPIENT_APPROVED",
+      "decision": "DENIED",
+      "denialReason": "RECIPIENT_NOT_APPROVED"
+    },
+    {
+      "id": "R006",
+      "name": "AMOUNT_WITHIN_LIMIT",
+      "description": "Transfers above the actor's per-action threshold require a secondary approval.",
+      "appliesTo": ["HBAR_TRANSFER"],
+      "check": "AMOUNT_WITHIN_LIMIT",
+      "decision": "APPROVAL_REQUIRED",
+      "denialReason": "AMOUNT_EXCEEDS_THRESHOLD"
+    },
+    {
+      "id": "R007",
+      "name": "TREASURY_NOT_RESTRICTED",
+      "description": "Transfers are routed to manual review when the treasury posture is RESTRICTED.",
+      "appliesTo": ["HBAR_TRANSFER"],
+      "check": "TREASURY_NOT_RESTRICTED",
+      "decision": "MANUAL_REVIEW",
+      "denialReason": "TREASURY_RESTRICTED"
+    }
+  ]
+}
