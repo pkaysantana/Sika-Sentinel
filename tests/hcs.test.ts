@@ -30,6 +30,7 @@ function makeAuditMessage(overrides: Partial<AuditMessage> = {}): AuditMessage {
     denialReason: null,
     denialDetail: "",
     evaluatedRules: [],
+    policyVersion: "",
   };
   return {
     correlationId,
@@ -41,6 +42,7 @@ function makeAuditMessage(overrides: Partial<AuditMessage> = {}): AuditMessage {
     topicId: "",
     sequenceNumber: -1,
     payloadHash: "",
+    policyVersion: "",
     ...overrides,
     // action must match correlationId — rebuild if correlationId was overridden
     ...(overrides.correlationId ? { action: { ...action, correlationId: overrides.correlationId as string } } : {}),

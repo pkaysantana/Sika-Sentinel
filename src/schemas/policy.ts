@@ -37,6 +37,14 @@ export const PolicyResultSchema = z.object({
   denialReason: DenialReasonSchema.nullable().default(null),
   denialDetail: z.string().default(""),
   evaluatedRules: z.array(z.string()).default([]), // rule IDs checked, in evaluation order
+  /**
+   * SHA-256 hash of the policy catalogue that produced this result
+   * (`sha256:<hex>`). Attached for governance: every decision is pinned to
+   * the exact rule document that was in force when it was made.
+   *
+   * Defaults to "" so pre-catalogue audit events still parse.
+   */
+  policyVersion: z.string().default(""),
 });
 
 export type PolicyResult = z.infer<typeof PolicyResultSchema>;

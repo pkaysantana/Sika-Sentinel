@@ -34,6 +34,7 @@ export async function record(
     topicId: "",
     sequenceNumber: -1,
     payloadHash: "",
+    policyVersion: policyResult.policyVersion ?? "",
     ...(agentContext !== undefined ? { agentContext } : {}),
   };
 

@@ -38,6 +38,13 @@ export const AuditMessageSchema = z.object({
    * itself). Used by replay to verify the fetched payload hasn't been altered.
    */
   payloadHash: z.string().default(""),
+  /**
+   * Version of the policy catalogue that produced `policyResult`. Mirrored
+   * from `policyResult.policyVersion` for indexing and filtering convenience
+   * (e.g. "show me every decision made under catalogue X"). Defaults to ""
+   * so pre-catalogue events still parse.
+   */
+  policyVersion: z.string().default(""),
 });
 
 export type AuditMessage = z.infer<typeof AuditMessageSchema>;
