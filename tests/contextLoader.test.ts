@@ -7,6 +7,8 @@ import {
   reloadStore,
   getTreasuryPosture,
   setTreasuryPosture,
+  addApprovedRecipient,
+  getApprovedRecipients,
 } from "../src/context/loader";
 
 beforeEach(() => reloadStore());
@@ -161,5 +163,90 @@ describe("loadContext — JSON file backend", () => {
     reloadStore();
     const ctx = loadContext("0.0.100");
     expect(ctx.actorId).toBe("0.0.100");
+  });
+
+  it("falls back to in-memory when actor record is missing a required field", () => {
+    // Valid JSON, valid store shape, but actor record omits `role` — Zod should
+    // reject the actor and the store parse should fail, triggering the fallback.
+    const storeFile = path.join(tmpDir, "ctx.json");
+    fs.writeFileSync(storeFile, JSON.stringify({
+      treasury: { posture: "NORMAL" },
+      actors: {
+        "0.0.700": {
+          // role is intentionally omitted
+          partner_id: "missing-role-partner",
+          amount_threshold_hbar: 10.0,
+          approved_recipients: [],
+          enforce_recipient_allowlist: true,
+        },
+      },
+    }));
+    process.env.CONTEXT_STORE_PATH = storeFile;
+    reloadStore();
+    // Fallback store should be used, which has the demo actors
+    const ctx = loadContext("0.0.100");
+    expect(ctx.actorId).toBe("0.0.100");
+  });
+});
+
+// ── addApprovedRecipient edge cases ───────────────────────────────────────────
+
+describe("addApprovedRecipient — deduplication", () => {
+  it("adding a recipient that is already present is a no-op", () => {
+    // 0.0.800 is already in 0.0.100's approved list in the fallback store
+    addApprovedRecipient("0.0.100", "0.0.800");
+    const recipients = getApprovedRecipients("0.0.100");
+    expect(recipients.filter((r) => r === "0.0.800")).toHaveLength(1);
+  });
+
+  it("adding a new recipient appends it exactly once", () => {
+    addApprovedRecipient("0.0.100", "0.0.9999");
+    const recipients = getApprovedRecipients("0.0.100");
+    expect(recipients).toContain("0.0.9999");
+    expect(recipients.filter((r) => r === "0.0.9999")).toHaveLength(1);
+  });
+
+  it("adding the same new recipient twice still results in one entry", () => {
+    addApprovedRecipient("0.0.100", "0.0.8888");
+    addApprovedRecipient("0.0.100", "0.0.8888");
+    const recipients = getApprovedRecipients("0.0.100");
+    expect(recipients.filter((r) => r === "0.0.8888")).toHaveLength(1);
+  });
+
+  it("throws for unknown actor", () => {
+    expect(() => addApprovedRecipient("0.0.999", "0.0.800")).toThrow("0.0.999");
+  });
+});
+
+describe("addApprovedRecipient — file write failure is non-fatal", () => {
+  let tmpDir: string;
+  let origEnv: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "sika-write-fail-"));
+    origEnv = process.env.CONTEXT_STORE_PATH;
+  });
+
+  afterEach(() => {
+    if (origEnv !== undefined) {
+      process.env.CONTEXT_STORE_PATH = origEnv;
+    } else {
+      delete process.env.CONTEXT_STORE_PATH;
+    }
+    reloadStore();
+  });
+
+  it("in-memory state is updated even when the store file does not exist", () => {
+    // Point to a path that cannot be written (nonexistent dir) so the
+    // writeFileSync inside addApprovedRecipient will throw internally.
+    process.env.CONTEXT_STORE_PATH = path.join(tmpDir, "nonexistent", "ctx.json");
+    reloadStore();
+
+    // Should not throw despite the file path being unwritable
+    expect(() => addApprovedRecipient("0.0.100", "0.0.7777")).not.toThrow();
+
+    // In-memory state must still reflect the addition
+    const recipients = getApprovedRecipients("0.0.100");
+    expect(recipients).toContain("0.0.7777");
   });
 });

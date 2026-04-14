@@ -9,6 +9,8 @@ import {
   type TransferResult,
 } from "../src/hedera/transfer";
 import { hederaConfigFromEnv, type HederaConfig } from "../src/hedera/config";
+import { withTimeout, HederaTimeoutError } from "../src/hedera/timeout";
+import { isValidHederaId, assertValidHederaId } from "../src/hedera/validation";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -214,5 +216,74 @@ describe("HieroCLIBackend: binary not found", () => {
     await expect(backend.transfer(makeAction(), makeDryRunConfig())).rejects.toBeInstanceOf(TransferError);
     if (origPath !== undefined) process.env.HIERO_CLI_PATH = origPath;
     else delete process.env.HIERO_CLI_PATH;
+  });
+});
+
+// ── withTimeout ───────────────────────────────────────────────────────────────
+
+describe("withTimeout", () => {
+  it("resolves when promise settles before deadline", async () => {
+    const result = await withTimeout(Promise.resolve(42), 5_000, "test-op");
+    expect(result).toBe(42);
+  });
+
+  it("throws HederaTimeoutError when promise takes too long", async () => {
+    const neverResolves = new Promise<never>(() => {});
+    await expect(withTimeout(neverResolves, 20, "slow-op")).rejects.toBeInstanceOf(HederaTimeoutError);
+  });
+
+  it("HederaTimeoutError message contains label and duration", async () => {
+    const neverResolves = new Promise<never>(() => {});
+    const err = await withTimeout(neverResolves, 20, "my-label").catch((e) => e);
+    expect(err.message).toContain("my-label");
+    expect(err.message).toContain("20ms");
+  });
+
+  it("HederaTimeoutError carries label and timeoutMs properties", async () => {
+    const neverResolves = new Promise<never>(() => {});
+    const err = await withTimeout(neverResolves, 20, "labelled-op").catch((e) => e) as HederaTimeoutError;
+    expect(err.label).toBe("labelled-op");
+    expect(err.timeoutMs).toBe(20);
+    expect(err.name).toBe("HederaTimeoutError");
+  });
+
+  it("does not throw when promise rejects before deadline (propagates original error)", async () => {
+    const failing = Promise.reject(new Error("upstream failure"));
+    await expect(withTimeout(failing, 5_000, "test-op")).rejects.toThrow("upstream failure");
+  });
+
+  it("clears the timer when promise resolves (no lingering timer)", async () => {
+    // If timer is not cleared, this test would leave a dangling timer warning.
+    // We can't assert cleanup directly, but the test completing without warnings
+    // confirms it.
+    await withTimeout(Promise.resolve("done"), 5_000, "cleanup-test");
+  });
+});
+
+// ── isValidHederaId / assertValidHederaId ─────────────────────────────────────
+
+describe("isValidHederaId", () => {
+  it("accepts 0.0.800", () => expect(isValidHederaId("0.0.800")).toBe(true));
+  it("accepts 0.0.1", () => expect(isValidHederaId("0.0.1")).toBe(true));
+  it("accepts 2.3.456", () => expect(isValidHederaId("2.3.456")).toBe(true));
+  it("rejects empty string", () => expect(isValidHederaId("")).toBe(false));
+  it("rejects plain number", () => expect(isValidHederaId("800")).toBe(false));
+  it("rejects 0.0.abc", () => expect(isValidHederaId("0.0.abc")).toBe(false));
+  it("rejects 0.0.", () => expect(isValidHederaId("0.0.")).toBe(false));
+  it("rejects with extra segments", () => expect(isValidHederaId("0.0.0.800")).toBe(false));
+  it("rejects hex prefix", () => expect(isValidHederaId("0x0.0.800")).toBe(false));
+});
+
+describe("assertValidHederaId", () => {
+  it("does not throw for valid ID", () => {
+    expect(() => assertValidHederaId("0.0.800")).not.toThrow();
+  });
+
+  it("throws for invalid ID with descriptive message", () => {
+    expect(() => assertValidHederaId("bad-id", "recipientId")).toThrow("recipientId");
+  });
+
+  it("error message includes the bad value", () => {
+    expect(() => assertValidHederaId("notanid")).toThrow("notanid");
   });
 });

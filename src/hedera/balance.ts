@@ -8,6 +8,7 @@
 
 import type { Action } from "../schemas/action";
 import { hederaConfigFromEnv } from "./config";
+import { withTimeout, DEFAULT_HEDERA_TIMEOUT_MS } from "./timeout";
 
 export interface BalanceResult {
   readonly accountId: string;
@@ -24,10 +25,15 @@ async function queryBalanceSdk(action: Action): Promise<BalanceResult> {
   // AccountBalanceQuery is a free query — no operator signature required.
   // We still need a client pointed at the right network; forName handles that.
   const client = Client.forName(cfg.network);
+  client.setRequestTimeout(DEFAULT_HEDERA_TIMEOUT_MS);
 
   try {
     const query = new AccountBalanceQuery().setAccountId(AccountId.fromString(action.actorId));
-    const balance = await query.execute(client);
+    const balance = await withTimeout(
+      query.execute(client),
+      DEFAULT_HEDERA_TIMEOUT_MS,
+      "AccountBalanceQuery.execute",
+    );
 
     return {
       accountId: action.actorId,

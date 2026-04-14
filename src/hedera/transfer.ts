@@ -7,9 +7,11 @@
  *   dry_run  → No-op stub  (tests / offline demo)
  */
 
-import { execSync } from "child_process";
+import { spawn } from "child_process";
 import type { Action } from "../schemas/action";
 import { hederaConfigFromEnv, type HederaConfig } from "./config";
+import { assertValidHederaId } from "./validation";
+import { withTimeout, HederaTimeoutError, DEFAULT_HEDERA_TIMEOUT_MS } from "./timeout";
 
 // ── Transfer result ───────────────────────────────────────────────────────────
 
@@ -66,10 +68,13 @@ export class HederaSdkBackend implements TransferBackend {
     let recipientId: InstanceType<typeof AccountId>;
 
     try {
+      assertValidHederaId(config.operatorId, "operatorId");
+      assertValidHederaId(config.treasuryId, "treasuryId");
+      assertValidHederaId(action.recipientId, "recipientId");
       operatorId = AccountId.fromString(config.operatorId);
-      operatorKey = PrivateKey.fromStringECDSA(config.operatorKey.replace(/^0x/i, ''));
+      operatorKey = PrivateKey.fromStringDer(config.operatorKey.replace(/^0x/i, ""));
       treasuryId = AccountId.fromString(config.treasuryId);
-      treasuryKey = PrivateKey.fromStringECDSA(config.treasuryKey.replace(/^0x/i, ''));
+      treasuryKey = PrivateKey.fromStringDer(config.treasuryKey.replace(/^0x/i, ""));
       recipientId = AccountId.fromString(action.recipientId);
     } catch (err) {
       throw new TransferError(
@@ -83,18 +88,27 @@ export class HederaSdkBackend implements TransferBackend {
       const client =
         config.network === "testnet" ? Client.forTestnet() : Client.forMainnet();
       client.setOperator(operatorId, operatorKey);
+      client.setRequestTimeout(DEFAULT_HEDERA_TIMEOUT_MS);
 
       // 1 HBAR = 100_000_000 tinybars
       const tinybars = Math.round(action.amountHbar * 100_000_000);
 
-      const txResponse = await new TransferTransaction()
-        .addHbarTransfer(treasuryId, Hbar.fromTinybars(-tinybars))
-        .addHbarTransfer(recipientId, Hbar.fromTinybars(tinybars))
-        .freezeWith(client)
-        .sign(treasuryKey)
-        .then((tx) => tx.execute(client));
+      const txResponse = await withTimeout(
+        new TransferTransaction()
+          .addHbarTransfer(treasuryId, Hbar.fromTinybars(-tinybars))
+          .addHbarTransfer(recipientId, Hbar.fromTinybars(tinybars))
+          .freezeWith(client)
+          .sign(treasuryKey)
+          .then((tx) => tx.execute(client)),
+        DEFAULT_HEDERA_TIMEOUT_MS,
+        "TransferTransaction.execute",
+      );
 
-      const receipt = await txResponse.getReceipt(client);
+      const receipt = await withTimeout(
+        txResponse.getReceipt(client),
+        DEFAULT_HEDERA_TIMEOUT_MS,
+        "TransferTransaction.getReceipt",
+      );
       const status = receipt.status.toString();
 
       if (status !== "SUCCESS") {
@@ -116,6 +130,7 @@ export class HederaSdkBackend implements TransferBackend {
       };
     } catch (err) {
       if (err instanceof TransferError) throw err;
+      if (err instanceof HederaTimeoutError) throw new TransferError(err.message, action, { recoverable: true });
       throw new TransferError(`SDK transfer failed: ${err}`, action, {
         recoverable: true,
       });
@@ -123,14 +138,45 @@ export class HederaSdkBackend implements TransferBackend {
   }
 }
 
+// ── Async spawn helper ────────────────────────────────────────────────────────
+
+/**
+ * Run a subprocess asynchronously and return its stdout as a string.
+ * Rejects on non-zero exit code, ENOENT, or any spawn error.
+ * Does NOT impose its own timeout — wrap the returned promise in withTimeout().
+ */
+function spawnAsync(binary: string, args: string[]): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const proc = spawn(binary, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+
+    proc.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+    proc.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+
+    proc.on("error", (err: NodeJS.ErrnoException) => reject(err));
+
+    proc.on("close", (code: number | null) => {
+      if (code === 0) {
+        resolve(Buffer.concat(stdoutChunks).toString("utf-8"));
+      } else {
+        const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
+        reject(new Error(`Process exited with code ${code}${stderr ? `: ${stderr}` : ""}`));
+      }
+    });
+  });
+}
+
 // ── Backend: Hiero CLI (fallback) ─────────────────────────────────────────────
+
+const CLI_TIMEOUT_MS = DEFAULT_HEDERA_TIMEOUT_MS * 2; // CLI is slower than SDK
 
 export class HieroCLIBackend implements TransferBackend {
   private readonly cliBinary = process.env.HIERO_CLI_PATH ?? "hiero";
 
   async transfer(action: Action, config: HederaConfig): Promise<TransferResult> {
-    const cmd = [
-      this.cliBinary, "transfer",
+    const args = [
+      "transfer",
       "--network", config.network,
       "--operator-id", config.operatorId,
       "--operator-key", config.operatorKey,
@@ -140,12 +186,19 @@ export class HieroCLIBackend implements TransferBackend {
       "--amount", String(action.amountHbar),
       "--unit", "hbar",
       "--output", "json",
-    ].join(" ");
+    ];
 
     let stdout: string;
     try {
-      stdout = execSync(cmd, { timeout: 30_000 }).toString();
+      stdout = await withTimeout(
+        spawnAsync(this.cliBinary, args),
+        CLI_TIMEOUT_MS,
+        `hiero-cli transfer ${action.correlationId}`,
+      );
     } catch (err: unknown) {
+      if (err instanceof HederaTimeoutError) {
+        throw new TransferError(err.message, action, { recoverable: false });
+      }
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("ENOENT") || msg.includes("not found")) {
         throw new TransferError(

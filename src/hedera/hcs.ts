@@ -9,6 +9,7 @@ import type { AuditMessage } from "../schemas/audit";
 import { AuditMessageSchema } from "../schemas/audit";
 import { hederaConfigFromEnv } from "./config";
 import { computePayloadHash, verifyPayloadHash } from "../audit/integrity";
+import { withTimeout, DEFAULT_HEDERA_TIMEOUT_MS } from "./timeout";
 
 const MIRROR_NODE_URL =
   process.env.MIRROR_NODE_URL ?? "https://testnet.mirrornode.hedera.com";
@@ -43,8 +44,9 @@ export async function submitMessage(msg: AuditMessage): Promise<AuditMessage> {
     config.network === "testnet" ? Client.forTestnet() : Client.forMainnet();
   client.setOperator(
     AccountId.fromString(config.operatorId),
-    PrivateKey.fromStringECDSA(config.operatorKey.replace(/^0x/i, ''))
+    PrivateKey.fromStringDer(config.operatorKey.replace(/^0x/i, ""))
   );
+  client.setRequestTimeout(DEFAULT_HEDERA_TIMEOUT_MS);
 
   // Compute integrity hash over the canonical payload (excluding payloadHash
   // itself) and attach it before serialization.
@@ -55,12 +57,20 @@ export async function submitMessage(msg: AuditMessage): Promise<AuditMessage> {
 
   const payload = JSON.stringify(msgWithHash);
 
-  const txResponse = await new TopicMessageSubmitTransaction()
-    .setTopicId(TopicId.fromString(topicId))
-    .setMessage(payload)
-    .execute(client);
+  const txResponse = await withTimeout(
+    new TopicMessageSubmitTransaction()
+      .setTopicId(TopicId.fromString(topicId))
+      .setMessage(payload)
+      .execute(client),
+    DEFAULT_HEDERA_TIMEOUT_MS,
+    "TopicMessageSubmitTransaction.execute",
+  );
 
-  const receipt = await txResponse.getReceipt(client);
+  const receipt = await withTimeout(
+    txResponse.getReceipt(client),
+    DEFAULT_HEDERA_TIMEOUT_MS,
+    "TopicMessageSubmitTransaction.getReceipt",
+  );
   const sequenceNumber = Number(receipt.topicSequenceNumber);
 
   return {

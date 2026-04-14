@@ -12,6 +12,7 @@
 
 import type { Action } from "../schemas/action";
 import { hederaConfigFromEnv } from "./config";
+import { withTimeout, DEFAULT_HEDERA_TIMEOUT_MS } from "./timeout";
 
 export interface ScheduleResult {
   readonly scheduleId: string;
@@ -38,15 +39,14 @@ async function createScheduleSdk(action: Action): Promise<ScheduleResult> {
   const cfg = hederaConfigFromEnv();
 
   const operatorId = AccountId.fromString(cfg.operatorId);
-  const operatorKey = PrivateKey.fromStringECDSA(
-    cfg.operatorKey.replace(/^0x/i, "")
-  );
+  const operatorKey = PrivateKey.fromStringDer(cfg.operatorKey.replace(/^0x/i, ""));
   const treasuryId = AccountId.fromString(cfg.treasuryId);
   const recipientId = AccountId.fromString(action.recipientId);
 
   const client =
     cfg.network === "testnet" ? Client.forTestnet() : Client.forMainnet();
   client.setOperator(operatorId, operatorKey);
+  client.setRequestTimeout(DEFAULT_HEDERA_TIMEOUT_MS);
 
   try {
     const tinybars = Math.round(action.amountHbar * 100_000_000);
@@ -66,8 +66,16 @@ async function createScheduleSdk(action: Action): Promise<ScheduleResult> {
       )
       .freezeWith(client);
 
-    const response = await scheduleTx.execute(client);
-    const receipt = await response.getReceipt(client);
+    const response = await withTimeout(
+      scheduleTx.execute(client),
+      DEFAULT_HEDERA_TIMEOUT_MS,
+      "ScheduleCreateTransaction.execute",
+    );
+    const receipt = await withTimeout(
+      response.getReceipt(client),
+      DEFAULT_HEDERA_TIMEOUT_MS,
+      "ScheduleCreateTransaction.getReceipt",
+    );
 
     const scheduleId = receipt.scheduleId?.toString() ?? "";
     if (!scheduleId) {
@@ -130,19 +138,18 @@ async function approveScheduleSdk(scheduleId: string): Promise<ApprovalResult> {
   const approverId = AccountId.fromString(
     process.env.HEDERA_APPROVER_ID || cfg.treasuryId
   );
-  const approverKey = PrivateKey.fromStringECDSA(
+  const approverKey = PrivateKey.fromStringDer(
     (process.env.HEDERA_APPROVER_KEY || cfg.treasuryKey).replace(/^0x/i, "")
   );
 
   // Operator pays the ScheduleSign fee
   const operatorId = AccountId.fromString(cfg.operatorId);
-  const operatorKey = PrivateKey.fromStringECDSA(
-    cfg.operatorKey.replace(/^0x/i, "")
-  );
+  const operatorKey = PrivateKey.fromStringDer(cfg.operatorKey.replace(/^0x/i, ""));
 
   const client =
     cfg.network === "testnet" ? Client.forTestnet() : Client.forMainnet();
   client.setOperator(operatorId, operatorKey);
+  client.setRequestTimeout(DEFAULT_HEDERA_TIMEOUT_MS);
 
   try {
     const signTx = new ScheduleSignTransaction()
@@ -152,8 +159,16 @@ async function approveScheduleSdk(scheduleId: string): Promise<ApprovalResult> {
     // Sign with the approver key (treasury key by default — this is the
     // missing signature that the inner TransferTransaction needs)
     const signedTx = await signTx.sign(approverKey);
-    const response = await signedTx.execute(client);
-    const receipt = await response.getReceipt(client);
+    const response = await withTimeout(
+      signedTx.execute(client),
+      DEFAULT_HEDERA_TIMEOUT_MS,
+      "ScheduleSignTransaction.execute",
+    );
+    const receipt = await withTimeout(
+      response.getReceipt(client),
+      DEFAULT_HEDERA_TIMEOUT_MS,
+      "ScheduleSignTransaction.getReceipt",
+    );
 
     const status = receipt.status.toString();
     const signTxId = response.transactionId.toString();

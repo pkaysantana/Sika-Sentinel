@@ -1,12 +1,40 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { Action } from "../src/schemas/action";
 import {
   runPolicyOnly,
+  run,
   isApproved,
   decisionLabel,
   type PipelineResult,
 } from "../src/runtime/pipeline";
 import { reloadStore, setTreasuryPosture } from "../src/context/loader";
+
+// ── Mock Hedera execution modules ─────────────────────────────────────────────
+vi.mock("../src/hedera/transfer", () => ({
+  executeHbarTransfer: vi.fn().mockResolvedValue({ txId: "0.0.3@1234567890.000" }),
+}));
+
+vi.mock("../src/hedera/balance", () => ({
+  queryBalance: vi.fn().mockResolvedValue({ balanceHbar: 42.5 }),
+}));
+
+vi.mock("../src/audit/trail", () => ({
+  record: vi.fn().mockResolvedValue({
+    topicId: "0.0.5001",
+    sequenceNumber: 7,
+    correlationId: "test-corr-id",
+    actorId: "0.0.100",
+    recipientId: "0.0.800",
+    amountHbar: 5.0,
+    decision: "APPROVED",
+    denialReason: null,
+    txId: "0.0.3@1234567890.000",
+    timestamp: new Date().toISOString(),
+    payloadHash: "",
+    scheduleId: "",
+    agentContext: null,
+  }),
+}));
 
 beforeEach(() => reloadStore());
 afterEach(() => reloadStore());
@@ -193,5 +221,166 @@ describe("correlation ID preservation", () => {
     const action = makeAction();
     const result = runPolicyOnly(action);
     expect(result.action.correlationId).toBe(action.correlationId);
+  });
+});
+
+// ── run() — full pipeline orchestration ──────────────────────────────────────
+
+import { executeHbarTransfer } from "../src/hedera/transfer";
+import { record as recordAudit } from "../src/audit/trail";
+
+describe("run() — APPROVED path", () => {
+  beforeEach(() => {
+    vi.mocked(executeHbarTransfer).mockResolvedValue({ txId: "0.0.3@1234567890.000" });
+    vi.mocked(recordAudit).mockResolvedValue({
+      topicId: "0.0.5001",
+      sequenceNumber: 7,
+      correlationId: "test-corr-id",
+      actorId: "0.0.100",
+      recipientId: "0.0.800",
+      amountHbar: 5.0,
+      decision: "APPROVED",
+      denialReason: null,
+      txId: "0.0.3@1234567890.000",
+      timestamp: new Date().toISOString(),
+      payloadHash: "",
+      scheduleId: "",
+      agentContext: null,
+    });
+    reloadStore();
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+    reloadStore();
+  });
+
+  it("returns stage AUDITED when transfer and audit succeed", async () => {
+    const result = await run(makeAction());
+    expect(result.stage).toBe("AUDITED");
+  });
+
+  it("populates txId from transfer result", async () => {
+    const result = await run(makeAction());
+    expect(result.txId).toBe("0.0.3@1234567890.000");
+  });
+
+  it("populates hcsTopicId and hcsSequenceNumber from audit", async () => {
+    const result = await run(makeAction());
+    expect(result.hcsTopicId).toBe("0.0.5001");
+    expect(result.hcsSequenceNumber).toBe(7);
+  });
+
+  it("executeHbarTransfer is called once", async () => {
+    await run(makeAction());
+    expect(executeHbarTransfer).toHaveBeenCalledOnce();
+  });
+
+  it("recordAudit is called once regardless of outcome", async () => {
+    await run(makeAction());
+    expect(recordAudit).toHaveBeenCalledOnce();
+  });
+});
+
+describe("run() — DENIED path", () => {
+  beforeEach(() => {
+    vi.mocked(executeHbarTransfer).mockClear();
+    vi.mocked(recordAudit).mockResolvedValue({
+      topicId: "0.0.5001",
+      sequenceNumber: 8,
+      correlationId: "test-corr-id",
+      actorId: "0.0.100",
+      recipientId: "0.0.999",
+      amountHbar: 5.0,
+      decision: "DENIED",
+      denialReason: "RECIPIENT_NOT_APPROVED",
+      txId: "",
+      timestamp: new Date().toISOString(),
+      payloadHash: "",
+      scheduleId: "",
+      agentContext: null,
+    });
+    reloadStore();
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+    reloadStore();
+  });
+
+  it("returns stage AUDITED on denial (audit still written)", async () => {
+    const result = await run(makeAction({ recipientId: "0.0.999" }));
+    expect(result.stage).toBe("AUDITED");
+  });
+
+  it("does NOT call executeHbarTransfer when DENIED", async () => {
+    await run(makeAction({ recipientId: "0.0.999" }));
+    expect(executeHbarTransfer).not.toHaveBeenCalled();
+  });
+
+  it("txId is empty string on denial", async () => {
+    const result = await run(makeAction({ recipientId: "0.0.999" }));
+    expect(result.txId).toBe("");
+  });
+
+  it("recordAudit is still called once on denial", async () => {
+    await run(makeAction({ recipientId: "0.0.999" }));
+    expect(recordAudit).toHaveBeenCalledOnce();
+  });
+});
+
+describe("run() — transfer failure", () => {
+  beforeEach(() => {
+    vi.mocked(executeHbarTransfer).mockRejectedValue(new Error("network timeout"));
+    reloadStore();
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+    reloadStore();
+  });
+
+  it("returns stage ERROR when transfer throws", async () => {
+    const result = await run(makeAction());
+    expect(result.stage).toBe("ERROR");
+  });
+
+  it("error message contains transfer failure reason", async () => {
+    const result = await run(makeAction());
+    expect(result.error).toContain("Transfer failed");
+  });
+});
+
+describe("run() — audit failure is non-fatal", () => {
+  beforeEach(() => {
+    vi.mocked(executeHbarTransfer).mockResolvedValue({ txId: "0.0.3@1234567890.000" });
+    vi.mocked(recordAudit).mockRejectedValue(new Error("HCS unavailable"));
+    reloadStore();
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+    reloadStore();
+  });
+
+  it("does not throw when audit record() throws", async () => {
+    await expect(run(makeAction())).resolves.toBeDefined();
+  });
+
+  it("stage is EXECUTED (not AUDITED) when audit fails after successful transfer", async () => {
+    const result = await run(makeAction());
+    expect(result.stage).toBe("EXECUTED");
+  });
+
+  it("txId is still populated even when audit fails", async () => {
+    const result = await run(makeAction());
+    expect(result.txId).toBe("0.0.3@1234567890.000");
+  });
+});
+
+describe("run() — unknown actor short-circuits in phase 1", () => {
+  it("returns stage ERROR without calling transfer or audit", async () => {
+    vi.mocked(executeHbarTransfer).mockClear();
+    vi.mocked(recordAudit).mockClear();
+    const result = await run(makeAction({ actorId: "0.0.999" }));
+    expect(result.stage).toBe("ERROR");
+    expect(executeHbarTransfer).not.toHaveBeenCalled();
+    expect(recordAudit).not.toHaveBeenCalled();
   });
 });
