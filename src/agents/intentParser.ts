@@ -64,6 +64,27 @@ const LOW_CONFIDENCE_THRESHOLD = 0.5;
 /** Below this threshold: continue but attach warnings. */
 const MEDIUM_CONFIDENCE_THRESHOLD = 0.8;
 
+// ── LLM availability helpers ──────────────────────────────────────────────────
+
+/**
+ * Returns true when at least one supported LLM provider key is present in
+ * the environment (OPENAI_API_KEY or ANTHROPIC_API_KEY).
+ */
+export function isLlmAvailable(): boolean {
+  return !!(process.env.OPENAI_API_KEY ?? process.env.ANTHROPIC_API_KEY);
+}
+
+/**
+ * Returns true when the heuristic result is not good enough for a transfer
+ * intent and the LLM should be consulted.
+ *
+ * Separate from `isLlmAvailable()` so the decision can be tested without
+ * touching environment variables.
+ */
+export function requiresLlm(intent: ActionType, confidence: number): boolean {
+  return intent === "HBAR_TRANSFER" && confidence < 0.75;
+}
+
 // ── Ambiguity classifier ──────────────────────────────────────────────────────
 
 type AmbiguitySignals = {
@@ -224,8 +245,7 @@ function extractHeuristic(
   confidence = Math.round(confidence * 100) / 100;
 
   // ── Determine whether LLM fallback is warranted ─────────────────────────────
-  // Trigger LLM if confidence is below threshold for transfer intent
-  const needsLlm = intent === "HBAR_TRANSFER" && confidence < 0.75;
+  const needsLlm = requiresLlm(intent, confidence);
 
   // ── Build Action ────────────────────────────────────────────────────────────
   const action = ActionSchema.parse({
@@ -280,8 +300,8 @@ async function extractViaLlm(
   rawInstruction: string,
   actorId: string
 ): Promise<ParseResult> {
+  if (!isLlmAvailable()) throw new Error("No LLM API key configured");
   const apiKey = process.env.OPENAI_API_KEY ?? process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error("No LLM API key configured");
 
   const { ChatOpenAI } = await import("@langchain/openai");
   const model = new ChatOpenAI({
@@ -384,11 +404,7 @@ export async function parseInstruction(
   );
 
   if (!needsLlm) return heuristicResult;
-
-  const hasLlmKey = !!(
-    process.env.OPENAI_API_KEY ?? process.env.ANTHROPIC_API_KEY
-  );
-  if (!hasLlmKey) return heuristicResult;
+  if (!isLlmAvailable()) return heuristicResult;
 
   try {
     return await extractViaLlm(rawInstruction, actorId);
