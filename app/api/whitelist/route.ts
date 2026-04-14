@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    addApprovedRecipient(actorId, recipientId.trim());
+    await addApprovedRecipient(actorId, recipientId.trim());
     const recipients = getApprovedRecipients(actorId);
     return NextResponse.json({ actorId, recipients });
   } catch (err) {

@@ -10,6 +10,7 @@
 import { z } from "zod";
 import fs from "fs";
 import path from "path";
+import { promises as fsPromises } from "fs";
 
 // ── Enums ─────────────────────────────────────────────────────────────────────
 
@@ -200,10 +201,11 @@ export function getTreasuryPosture(): TreasuryPosture {
  * Add a recipient account ID to the approved list for the given actor.
  * Persists the change to the store file so it survives process restarts.
  * No-ops silently if the recipient is already present.
+ * Uses non-blocking async file writes via fs.promises.
  *
  * @throws {Error} If actorId is not registered.
  */
-export function addApprovedRecipient(actorId: string, recipientId: string): void {
+export async function addApprovedRecipient(actorId: string, recipientId: string): Promise<void> {
   const store = loadStore();
 
   if (!(actorId in store.actors)) {
@@ -218,13 +220,14 @@ export function addApprovedRecipient(actorId: string, recipientId: string): void
 
   actor.approved_recipients.push(recipientId);
 
-  // Persist to file so the change survives restarts
+  // Persist to file so the change survives restarts (non-blocking via fs.promises)
   const storePath = resolveStorePath();
   try {
     // Read raw file to preserve comments/_comment field, then replace actors block
-    const existing = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    const raw = await fsPromises.readFile(storePath, "utf-8");
+    const existing = JSON.parse(raw);
     existing.actors[actorId].approved_recipients = actor.approved_recipients;
-    fs.writeFileSync(storePath, JSON.stringify(existing, null, 2) + "\n", "utf-8");
+    await fsPromises.writeFile(storePath, JSON.stringify(existing, null, 2) + "\n", "utf-8");
   } catch {
     // File write failure is non-fatal — the in-memory change still takes effect
   }
