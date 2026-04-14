@@ -4,6 +4,11 @@
  *
  * Response: PipelineResult merged with { parseResult: ParseResult }
  * All existing PipelineResult fields are at the top level; parseResult is nested.
+ *
+ * Validation:
+ *   - instruction is trimmed before processing
+ *   - empty / whitespace-only instructions are rejected (400)
+ *   - instructions longer than MAX_INSTRUCTION_LENGTH chars are rejected (400)
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -11,8 +16,24 @@ import { parseInstruction } from "../../../src/agents/intentParser";
 import { run } from "../../../src/runtime/pipeline";
 import { record as recordAudit } from "../../../src/audit/trail";
 import type { AgentContext } from "../../../src/schemas/audit";
+import { runLimiter } from "../../../src/middleware/limiters";
+
+const MAX_INSTRUCTION_LENGTH = 500;
+
+function getClientIp(req: NextRequest): string {
+  return (
+    req.headers.get("x-forwarded-for")?.split(",")[0].trim() ??
+    req.headers.get("x-real-ip") ??
+    "unknown"
+  );
+}
 
 export async function POST(req: NextRequest) {
+  const ip = getClientIp(req);
+  if (!runLimiter.allow(ip)) {
+    return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+  }
+
   let body: { instruction?: string; actorId?: string };
   try {
     body = await req.json();
@@ -20,9 +41,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { instruction, actorId } = body;
-  if (!instruction || typeof instruction !== "string") {
+  const { actorId } = body;
+  const rawInstruction = typeof body.instruction === "string"
+    ? body.instruction.trim()
+    : undefined;
+
+  if (!rawInstruction) {
     return NextResponse.json({ error: "instruction is required" }, { status: 400 });
+  }
+  if (rawInstruction.length > MAX_INSTRUCTION_LENGTH) {
+    return NextResponse.json(
+      { error: `instruction must be ${MAX_INSTRUCTION_LENGTH} characters or fewer` },
+      { status: 400 }
+    );
   }
   if (!actorId || typeof actorId !== "string") {
     return NextResponse.json({ error: "actorId is required" }, { status: 400 });
@@ -30,7 +61,7 @@ export async function POST(req: NextRequest) {
 
   try {
     // Stage 1: Intent Agent — parse natural language → structured action
-    const parseResult = await parseInstruction(instruction, actorId);
+    const parseResult = await parseInstruction(rawInstruction, actorId);
 
     // Guard: do not proceed when confidence is too low or instruction is ambiguous
     if (!parseResult.shouldProceed) {
