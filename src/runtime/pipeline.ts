@@ -38,10 +38,12 @@ export interface PipelineResult {
   txId: string;
   balanceHbar: number | null;   // populated for CHECK_BALANCE actions
   scheduleId: string;           // populated for APPROVAL_REQUIRED scheduled transfers
+  scheduleError: string;        // populated if schedule creation failed
 
   // Phase 2 — HCS audit
   hcsTopicId: string;
   hcsSequenceNumber: number;
+  auditStatus: "written" | "failed";  // tracks whether audit was successfully persisted
 
   // Error path
   error: string;
@@ -83,8 +85,10 @@ export function runPolicyOnly(action: Action): PipelineResult {
       txId: "",
       balanceHbar: null,
       scheduleId: "",
+      scheduleError: "",
       hcsTopicId: "",
       hcsSequenceNumber: -1,
+      auditStatus: "failed",
       error: String(err),
     };
   }
@@ -100,8 +104,10 @@ export function runPolicyOnly(action: Action): PipelineResult {
     txId: "",
     balanceHbar: null,
     scheduleId: "",
+    scheduleError: "",
     hcsTopicId: "",
     hcsSequenceNumber: -1,
+    auditStatus: "failed",
     error: "",
   };
 }
@@ -125,7 +131,9 @@ export async function run(action: Action, agentContext?: AgentContext): Promise<
   let txId = "";
   let balanceHbar: number | null = null;
   let scheduleId = "";
+  let scheduleError = "";
   let stage: PipelineStage = "POLICY_EVALUATED";
+  let auditStatus: "written" | "failed" = "failed";
 
   const decision = policyResult!.decision;
 
@@ -141,7 +149,9 @@ export async function run(action: Action, agentContext?: AgentContext): Promise<
           ...phase1,
           balanceHbar: null,
           scheduleId: "",
+          scheduleError: "",
           stage: "ERROR",
+          auditStatus: "failed",
           error: `Transfer failed: ${err}`,
         };
       }
@@ -156,7 +166,9 @@ export async function run(action: Action, agentContext?: AgentContext): Promise<
           ...phase1,
           balanceHbar: null,
           scheduleId: "",
+          scheduleError: "",
           stage: "ERROR",
+          auditStatus: "failed",
           error: `Balance query failed: ${err}`,
         };
       }
@@ -170,9 +182,11 @@ export async function run(action: Action, agentContext?: AgentContext): Promise<
       const schedResult = await createScheduledTransfer(action);
       scheduleId = schedResult.scheduleId;
       stage = "SCHEDULED";
-    } catch {
-      // Scheduled tx creation failed — non-fatal, fall through to audit
-      // with stage still POLICY_EVALUATED so it's clear no schedule was created.
+    } catch (err) {
+      // Scheduled tx creation failed — explicitly log the error
+      scheduleError = String(err);
+      console.error(`Schedule creation failed for action ${action.correlationId}: ${err}`);
+      // Fall through to audit with stage still POLICY_EVALUATED so it's clear no schedule was created
     }
   }
 
@@ -183,9 +197,12 @@ export async function run(action: Action, agentContext?: AgentContext): Promise<
     const auditMsg = await recordAudit(action, policyResult!, txId, agentContext, scheduleId);
     hcsTopicId = auditMsg.topicId;
     hcsSequenceNumber = auditMsg.sequenceNumber;
+    auditStatus = "written";
     if (stage !== "SCHEDULED") stage = "AUDITED";
-  } catch {
-    // Audit failure is non-fatal — log and continue
+  } catch (err) {
+    // Audit write failure is non-fatal, but we log it explicitly for observability
+    auditStatus = "failed";
+    console.error(`HCS audit write failed for action ${action.correlationId}: ${err}`);
   }
 
   return {
@@ -197,8 +214,10 @@ export async function run(action: Action, agentContext?: AgentContext): Promise<
     txId,
     balanceHbar,
     scheduleId,
+    scheduleError,
     hcsTopicId,
     hcsSequenceNumber,
+    auditStatus,
     error: "",
   };
 }

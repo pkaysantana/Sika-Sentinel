@@ -228,8 +228,12 @@ export async function addApprovedRecipient(actorId: string, recipientId: string)
     const existing = JSON.parse(raw);
     existing.actors[actorId].approved_recipients = actor.approved_recipients;
     await fsPromises.writeFile(storePath, JSON.stringify(existing, null, 2) + "\n", "utf-8");
-  } catch {
-    // File write failure is non-fatal — the in-memory change still takes effect
+  } catch (err) {
+    // File write failure is non-fatal — the in-memory change still takes effect,
+    // but we log the error explicitly for observability
+    console.error(
+      `Failed to persist approved recipients for actor '${actorId}' to ${storePath}: ${err}`
+    );
   }
 }
 
