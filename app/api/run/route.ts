@@ -76,11 +76,15 @@ export async function POST(req: NextRequest) {
 
       // Synthetic policy result — no execution, but the non-proceed outcome is
       // still recorded to HCS so the evidence trail is complete.
+      // Parse-blocked actions never reach the policy engine, so there is no
+      // catalogue version to pin them to — record as "" so replayers can
+      // distinguish parse-level blocks from engine decisions.
       const blockedPolicyResult = {
         decision: "DENIED" as const,
         denialReason: null,
         denialDetail: clarification,
         evaluatedRules: [] as string[],
+        policyVersion: "",
       };
 
       let hcsTopicId = "";
