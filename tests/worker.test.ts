@@ -110,13 +110,15 @@ describe("lifecycle — start / stop / isRunning", () => {
 // ── Polling ───────────────────────────────────────────────────────────────────
 
 describe("polling — drain called on schedule", () => {
+  const INTERVAL = 100;
+
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
   it("drain is NOT called immediately on start (deferred by pollIntervalMs)", () => {
     const outbox = freshOutbox();
     const drainSpy = vi.spyOn(outbox, "drain");
-    const worker = createDrainWorker(outbox, successShipper(), { pollIntervalMs: 1_000 });
+    const worker = createDrainWorker(outbox, successShipper(), { pollIntervalMs: INTERVAL });
     worker.start();
     // No time has elapsed
     expect(drainSpy).not.toHaveBeenCalled();
@@ -126,35 +128,33 @@ describe("polling — drain called on schedule", () => {
   it("drain is called after pollIntervalMs elapses", async () => {
     const outbox = freshOutbox();
     const drainSpy = vi.spyOn(outbox, "drain").mockResolvedValue({ written: 0, stillQueued: 0, terminal: 0 });
-    const worker = createDrainWorker(outbox, successShipper(), { pollIntervalMs: 1_000 });
+    const worker = createDrainWorker(outbox, successShipper(), { pollIntervalMs: INTERVAL });
     worker.start();
-    await vi.runAllTimersAsync();
-    expect(drainSpy).toHaveBeenCalledTimes(1);
+    // Advance exactly one interval — fires the first tick, then stop to prevent re-scheduling
+    await vi.advanceTimersByTimeAsync(INTERVAL);
     worker.stop();
+    expect(drainSpy).toHaveBeenCalledTimes(1);
   });
 
   it("drain is called again after a second interval", async () => {
     const outbox = freshOutbox();
     const drainSpy = vi.spyOn(outbox, "drain").mockResolvedValue({ written: 0, stillQueued: 0, terminal: 0 });
-    const worker = createDrainWorker(outbox, successShipper(), { pollIntervalMs: 1_000 });
+    const worker = createDrainWorker(outbox, successShipper(), { pollIntervalMs: INTERVAL });
     worker.start();
-    // First tick
-    await vi.runAllTimersAsync();
-    expect(drainSpy).toHaveBeenCalledTimes(1);
-    // Second tick
-    await vi.runAllTimersAsync();
-    expect(drainSpy).toHaveBeenCalledTimes(2);
+    // Two intervals = two ticks
+    await vi.advanceTimersByTimeAsync(INTERVAL * 2);
     worker.stop();
+    expect(drainSpy).toHaveBeenCalledTimes(2);
   });
 
   it("drain is NOT called after stop()", async () => {
     const outbox = freshOutbox();
     const drainSpy = vi.spyOn(outbox, "drain").mockResolvedValue({ written: 0, stillQueued: 0, terminal: 0 });
-    const worker = createDrainWorker(outbox, successShipper(), { pollIntervalMs: 1_000 });
+    const worker = createDrainWorker(outbox, successShipper(), { pollIntervalMs: INTERVAL });
     worker.start();
-    await vi.runAllTimersAsync(); // first tick fires
+    await vi.advanceTimersByTimeAsync(INTERVAL); // first tick fires
     worker.stop();
-    await vi.runAllTimersAsync(); // would-be second tick — but worker is stopped
+    await vi.advanceTimersByTimeAsync(INTERVAL * 2); // time passes, no more ticks
     expect(drainSpy).toHaveBeenCalledTimes(1);
   });
 });
@@ -162,6 +162,8 @@ describe("polling — drain called on schedule", () => {
 // ── onTick callback ───────────────────────────────────────────────────────────
 
 describe("onTick callback", () => {
+  const INTERVAL = 100;
+
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
@@ -170,11 +172,11 @@ describe("onTick callback", () => {
     outbox.enqueue(makeMessage());
     const ticks: unknown[] = [];
     const worker = createDrainWorker(outbox, successShipper(), {
-      pollIntervalMs: 100,
+      pollIntervalMs: INTERVAL,
       onTick: (r) => ticks.push(r),
     });
     worker.start();
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(INTERVAL);
     worker.stop();
     expect(ticks).toHaveLength(1);
     expect((ticks[0] as { written: number }).written).toBe(1);
@@ -186,11 +188,11 @@ describe("onTick callback", () => {
     vi.spyOn(outbox, "drain").mockRejectedValue(new Error("catastrophic drain failure"));
     const ticks: unknown[] = [];
     const worker = createDrainWorker(outbox, successShipper(), {
-      pollIntervalMs: 100,
+      pollIntervalMs: INTERVAL,
       onTick: (r) => ticks.push(r),
     });
     worker.start();
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(INTERVAL);
     worker.stop();
     expect(ticks).toHaveLength(1);
     expect((ticks[0] as { error?: string }).error).toMatch(/catastrophic/);
@@ -199,25 +201,28 @@ describe("onTick callback", () => {
   it("onTick is optional — worker does not throw when omitted", async () => {
     const outbox = freshOutbox();
     vi.spyOn(outbox, "drain").mockResolvedValue({ written: 0, stillQueued: 0, terminal: 0 });
-    const worker = createDrainWorker(outbox, successShipper(), { pollIntervalMs: 100 });
+    const worker = createDrainWorker(outbox, successShipper(), { pollIntervalMs: INTERVAL });
     worker.start();
-    await expect(vi.runAllTimersAsync()).resolves.not.toThrow();
+    await vi.advanceTimersByTimeAsync(INTERVAL);
     worker.stop();
+    // If we got here without an unhandled rejection, the test passes
   });
 });
 
 // ── Integration: enqueue → drain via worker ───────────────────────────────────
 
 describe("integration — entry enqueued before worker starts", () => {
+  const INTERVAL = 100;
+
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
   it("worker ships queued entry on first tick", async () => {
     const outbox = freshOutbox();
     const entry = outbox.enqueue(makeMessage());
-    const worker = createDrainWorker(outbox, successShipper(), { pollIntervalMs: 500 });
+    const worker = createDrainWorker(outbox, successShipper(), { pollIntervalMs: INTERVAL });
     worker.start();
-    await vi.runAllTimersAsync();
+    await vi.advanceTimersByTimeAsync(INTERVAL);
     worker.stop();
     expect(outbox.get(entry.id)?.state).toBe("written");
   });
