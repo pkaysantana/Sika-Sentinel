@@ -5,33 +5,47 @@
  * appended to a local, fsync'd journal; only after the entry is durable
  * does the writer attempt to ship it to HCS. If shipping fails, the entry
  * stays in `queued` state and a later `drain()` call (boot, cron, admin
- * action) retries it. If the journal write itself fails, `record()` raises
- * — the caller must treat the failure as loud because execution may have
- * already happened.
+ * action, or the background worker) retries it with exponential backoff.
+ * If the journal write itself fails, `record()` raises — the caller must
+ * treat the failure as loud because execution may have already happened.
+ *
+ * Retry policy
+ * ------------
+ *   Each failed ship attempt increments `attempts` and sets `nextAttemptAt`
+ *   to a future timestamp using exponential backoff (default: 30 s × 2^n).
+ *   `drain()` skips entries whose `nextAttemptAt` is still in the future.
+ *   Once `attempts >= maxShipAttempts` (default 5), the entry is automatically
+ *   transitioned to `failed_terminal` and no further shipping is attempted.
  *
  * Journal format
  * --------------
  *   Append-only JSONL. Each line is one full snapshot of an OutboxEntry:
  *     {"id":"...","state":"queued","createdAt":"...","updatedAt":"...",
- *      "attempts":0,"lastError":null,"topicId":"","sequenceNumber":-1,
- *      "message":{...AuditMessage...}}
+ *      "attempts":0,"lastError":null,"nextAttemptAt":null,
+ *      "topicId":"","sequenceNumber":-1,"message":{...AuditMessage...}}
  *   On load, all lines are replayed and folded by id — last writer wins.
  *   A single corrupt line does not invalidate prior entries; it is skipped
- *   with a console.warn. Compaction is not implemented in 1B; any future
- *   compaction can be a single `mv` of the current fold to a new file.
+ *   with a console.warn.
  *
  * Test backend
  * ------------
  *   A MemoryBackend is provided so tests never touch the disk. Pass it via
  *   `createOutbox({ backend: new MemoryBackend() })`. The default export
- *   (`outbox`) uses the file backend against AUDIT_OUTBOX_PATH or
- *   `data/audit-outbox.jsonl`.
+ *   uses the file backend against AUDIT_OUTBOX_PATH or `data/audit-outbox.jsonl`.
  */
 
 import fs from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
 import type { AuditMessage } from "../schemas/audit";
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/** Default maximum number of shipping attempts before an entry goes terminal. */
+export const DEFAULT_MAX_SHIP_ATTEMPTS = 5;
+
+/** Default base delay for exponential backoff (milliseconds). */
+export const DEFAULT_BACKOFF_BASE_MS = 30_000;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -41,6 +55,7 @@ import type { AuditMessage } from "../schemas/audit";
  *   queued          — durably written to the local journal; HCS submission
  *                     has either not been attempted yet or has failed
  *                     transiently. Attempts and lastError carry the history.
+ *                     nextAttemptAt tells the drain worker when to retry.
  *   written         — successfully submitted to HCS. topicId/sequenceNumber
  *                     populated from the receipt.
  *   failed_terminal — gave up after exhausting retry budget, or encountered
@@ -56,6 +71,12 @@ export interface OutboxEntry {
   updatedAt: string;
   attempts: number;
   lastError: string | null;
+  /**
+   * ISO timestamp of the earliest time this entry should next be attempted.
+   * null = try immediately (never been attempted, or backoff not applied).
+   * The drain worker skips entries where this is in the future.
+   */
+  nextAttemptAt: string | null;
   topicId: string;
   sequenceNumber: number;
   message: AuditMessage;
@@ -129,6 +150,27 @@ export class MemoryOutboxBackend implements OutboxBackend {
   }
 }
 
+// ── Outbox options ────────────────────────────────────────────────────────────
+
+export interface OutboxOptions {
+  /**
+   * Maximum number of shipping attempts before an entry is automatically
+   * moved to `failed_terminal`. Default: DEFAULT_MAX_SHIP_ATTEMPTS (5).
+   */
+  maxShipAttempts?: number;
+  /**
+   * Compute the backoff delay (in ms) after `attempt` failed attempts.
+   * Defaults to: baseMs * 2^(attempt-1), capped at 1 hour.
+   * `attempt` is 1-indexed (1 = after first failure).
+   * Tests inject `() => 0` to avoid sleeping.
+   */
+  backoffMs?: (attempt: number) => number;
+}
+
+function defaultBackoff(attempt: number): number {
+  return Math.min(DEFAULT_BACKOFF_BASE_MS * Math.pow(2, attempt - 1), 3_600_000);
+}
+
 // ── Outbox store ──────────────────────────────────────────────────────────────
 
 /**
@@ -157,8 +199,15 @@ function now(): string {
 
 export class Outbox {
   private readonly entries = new Map<string, OutboxEntry>();
+  private readonly maxShipAttempts: number;
+  private readonly backoffMs: (attempt: number) => number;
 
-  constructor(private readonly backend: OutboxBackend) {
+  constructor(
+    private readonly backend: OutboxBackend,
+    options: OutboxOptions = {}
+  ) {
+    this.maxShipAttempts = options.maxShipAttempts ?? DEFAULT_MAX_SHIP_ATTEMPTS;
+    this.backoffMs = options.backoffMs ?? defaultBackoff;
     // Fold the journal on construction so in-memory state matches disk.
     for (const snap of backend.loadAll()) {
       this.entries.set(snap.id, snap);
@@ -180,6 +229,7 @@ export class Outbox {
       updatedAt: now(),
       attempts: 0,
       lastError: null,
+      nextAttemptAt: null,
       topicId: "",
       sequenceNumber: -1,
       message,
@@ -190,13 +240,16 @@ export class Outbox {
   }
 
   /**
-   * Attempt to ship one queued entry via the supplied shipper. On success,
-   * the entry transitions to `written`. On failure, the entry stays in
-   * `queued` with `attempts` incremented and `lastError` set.
+   * Attempt to ship one queued entry via the supplied shipper.
    *
-   * Never throws — failures are returned as `{ ok: false }`. This keeps
-   * the call site simple: the pipeline can call ship() and trust that
-   * whatever it gets back, the durability invariant still holds.
+   * On success, the entry transitions to `written`.
+   *
+   * On failure, the entry stays `queued` with `attempts` incremented,
+   * `lastError` set, and `nextAttemptAt` pushed out by the backoff policy.
+   * If `attempts` reaches `maxShipAttempts`, the entry is automatically
+   * transitioned to `failed_terminal` instead.
+   *
+   * Never throws — failures are returned as `{ ok: false }`.
    */
   async ship(entryId: string, shipper: Shipper): Promise<ShipResult> {
     const current = this.entries.get(entryId);
@@ -210,6 +263,7 @@ export class Outbox {
           updatedAt: now(),
           attempts: 0,
           lastError: "entry not found",
+          nextAttemptAt: null,
           topicId: "",
           sequenceNumber: -1,
           message: {} as AuditMessage,
@@ -220,6 +274,13 @@ export class Outbox {
     if (current.state === "written") {
       return { ok: true, entry: { ...current } };
     }
+    if (current.state === "failed_terminal") {
+      return {
+        ok: false,
+        entry: { ...current },
+        error: `Entry ${entryId} is already in failed_terminal state`,
+      };
+    }
 
     try {
       const shipped = await shipper(current.message);
@@ -229,6 +290,7 @@ export class Outbox {
         updatedAt: now(),
         attempts: current.attempts + 1,
         lastError: null,
+        nextAttemptAt: null,
         topicId: shipped.topicId,
         sequenceNumber: shipped.sequenceNumber,
         message: shipped,
@@ -237,11 +299,38 @@ export class Outbox {
       this.entries.set(updated.id, updated);
       return { ok: true, entry: { ...updated } };
     } catch (err) {
+      const newAttempts = current.attempts + 1;
+      const errMsg = err instanceof Error ? err.message : String(err);
+
+      // Exhausted retry budget — mark terminal
+      if (newAttempts >= this.maxShipAttempts) {
+        const terminal: OutboxEntry = {
+          ...current,
+          state: "failed_terminal",
+          updatedAt: now(),
+          attempts: newAttempts,
+          lastError: `Max attempts (${this.maxShipAttempts}) exhausted. Last error: ${errMsg}`,
+          nextAttemptAt: null,
+        };
+        this.backend.append(terminal);
+        this.entries.set(terminal.id, terminal);
+        return {
+          ok: false,
+          entry: { ...terminal },
+          error: terminal.lastError ?? "max attempts exhausted",
+        };
+      }
+
+      // Schedule next retry with exponential backoff
+      const delayMs = this.backoffMs(newAttempts);
+      const nextAttemptAt = new Date(Date.now() + delayMs).toISOString();
+
       const updated: OutboxEntry = {
         ...current,
         updatedAt: now(),
-        attempts: current.attempts + 1,
-        lastError: err instanceof Error ? err.message : String(err),
+        attempts: newAttempts,
+        lastError: errMsg,
+        nextAttemptAt,
       };
       this.backend.append(updated);
       this.entries.set(updated.id, updated);
@@ -254,26 +343,41 @@ export class Outbox {
   }
 
   /**
-   * Iterate every currently queued entry and try to ship it. Used on boot
-   * to flush anything left over from a prior crash, or as a cron target.
+   * Iterate every currently queued entry that is due for shipping (i.e.
+   * `nextAttemptAt` is null or in the past) and try to ship it. Used by
+   * the background worker, on boot, or as an admin/cron target.
+   *
    * Returns counts for visibility.
    */
-  async drain(shipper: Shipper): Promise<{ written: number; stillQueued: number }> {
+  async drain(shipper: Shipper): Promise<{ written: number; stillQueued: number; terminal: number }> {
     let written = 0;
     let stillQueued = 0;
+    let terminal = 0;
+    const nowTs = new Date().toISOString();
+
     for (const entry of this.entries.values()) {
       if (entry.state !== "queued") continue;
+      // Skip entries that are not yet due (backoff window still active)
+      if (entry.nextAttemptAt !== null && entry.nextAttemptAt > nowTs) {
+        stillQueued++;
+        continue;
+      }
       const result = await this.ship(entry.id, shipper);
-      if (result.ok) written++;
-      else stillQueued++;
+      if (result.ok) {
+        written++;
+      } else if (result.entry.state === "failed_terminal") {
+        terminal++;
+      } else {
+        stillQueued++;
+      }
     }
-    return { written, stillQueued };
+    return { written, stillQueued, terminal };
   }
 
   /**
    * Mark an entry as terminally failed. Used by admin/cron tooling when an
-   * entry has clearly become unrecoverable (e.g. misconfigured topic, rule
-   * schema change). The pipeline does not reach this path today.
+   * entry has clearly become unrecoverable (e.g. misconfigured topic).
+   * `ship()` also calls this automatically when maxShipAttempts is reached.
    */
   markFailedTerminal(entryId: string, reason: string): OutboxEntry | null {
     const current = this.entries.get(entryId);
@@ -283,6 +387,7 @@ export class Outbox {
       state: "failed_terminal",
       updatedAt: now(),
       lastError: reason,
+      nextAttemptAt: null,
     };
     this.backend.append(updated);
     this.entries.set(updated.id, updated);
@@ -300,9 +405,17 @@ export class Outbox {
     return Array.from(this.entries.values()).map((e) => ({ ...e }));
   }
 
-  /** Entries currently awaiting HCS confirmation. */
+  /** All entries currently in queued state (regardless of nextAttemptAt). */
   pending(): OutboxEntry[] {
     return this.all().filter((e) => e.state === "queued");
+  }
+
+  /** Queued entries that are due for a shipping attempt right now. */
+  due(): OutboxEntry[] {
+    const nowTs = new Date().toISOString();
+    return this.all().filter(
+      (e) => e.state === "queued" && (e.nextAttemptAt === null || e.nextAttemptAt <= nowTs)
+    );
   }
 }
 
@@ -335,7 +448,7 @@ export function resetDefaultOutbox(): void {
   _defaultOutbox = null;
 }
 
-/** Construct a fresh Outbox with a caller-supplied backend. Used by tests. */
-export function createOutbox(backend: OutboxBackend): Outbox {
-  return new Outbox(backend);
+/** Construct a fresh Outbox with a caller-supplied backend and optional policy options. */
+export function createOutbox(backend: OutboxBackend, options?: OutboxOptions): Outbox {
+  return new Outbox(backend, options);
 }
