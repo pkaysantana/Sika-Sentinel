@@ -9,8 +9,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { record as recordAudit } from "../../../../src/audit/trail";
 import type { Action } from "../../../../src/schemas/action";
+import { resolveCaller } from "../../../../src/auth/middleware";
 
 export async function POST(req: NextRequest) {
+  // Resolve caller for audit attribution. Non-fatal if resolution fails —
+  // the approval itself is not gated on caller identity at this endpoint
+  // (the schedule already went through auth at /api/run). We still record
+  // who signed it when a valid caller is present.
+  const callerResult = resolveCaller(req);
+  const callerRef = callerResult.ok
+    ? { id: callerResult.caller.id, kind: callerResult.caller.kind }
+    : null;
+
   let body: { scheduleId?: string };
   try {
     body = await req.json();
@@ -71,15 +81,15 @@ export async function POST(req: NextRequest) {
     let hcsTopicId = "";
     let hcsSequenceNumber = -1;
     try {
-      const auditMsg = await recordAudit(
-        approvalAction,
-        approvalPolicyResult,
-        result.signTxId,
-        undefined,
-        scheduleId.trim()
-      );
-      hcsTopicId = auditMsg.topicId;
-      hcsSequenceNumber = auditMsg.sequenceNumber;
+      const auditRecord = await recordAudit({
+        action: approvalAction,
+        policyResult: approvalPolicyResult,
+        txId: result.signTxId,
+        scheduleId: scheduleId.trim(),
+        caller: callerRef,
+      });
+      hcsTopicId = auditRecord.topicId;
+      hcsSequenceNumber = auditRecord.sequenceNumber;
     } catch {
       // Audit failure is non-fatal
     }

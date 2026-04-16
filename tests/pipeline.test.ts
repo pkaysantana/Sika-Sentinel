@@ -20,19 +20,23 @@ vi.mock("../src/hedera/balance", () => ({
 
 vi.mock("../src/audit/trail", () => ({
   record: vi.fn().mockResolvedValue({
+    message: {
+      correlationId: "test-corr-id",
+      timestamp: new Date().toISOString(),
+      action: {},
+      policyResult: {},
+      txId: "0.0.3@1234567890.000",
+      scheduleId: "",
+      topicId: "0.0.5001",
+      sequenceNumber: 7,
+      payloadHash: "",
+      policyVersion: "",
+      caller: null,
+    },
+    state: "written",
+    entryId: "mock-entry-id",
     topicId: "0.0.5001",
     sequenceNumber: 7,
-    correlationId: "test-corr-id",
-    actorId: "0.0.100",
-    recipientId: "0.0.800",
-    amountHbar: 5.0,
-    decision: "APPROVED",
-    denialReason: null,
-    txId: "0.0.3@1234567890.000",
-    timestamp: new Date().toISOString(),
-    payloadHash: "",
-    scheduleId: "",
-    agentContext: null,
   }),
 }));
 
@@ -233,19 +237,23 @@ describe("run() — APPROVED path", () => {
   beforeEach(() => {
     vi.mocked(executeHbarTransfer).mockResolvedValue({ txId: "0.0.3@1234567890.000" });
     vi.mocked(recordAudit).mockResolvedValue({
+      message: {
+        correlationId: "test-corr-id",
+        timestamp: new Date().toISOString(),
+        action: {} as any,
+        policyResult: {} as any,
+        txId: "0.0.3@1234567890.000",
+        scheduleId: "",
+        topicId: "0.0.5001",
+        sequenceNumber: 7,
+        payloadHash: "",
+        policyVersion: "",
+        caller: null,
+      },
+      state: "written",
+      entryId: "mock-entry-id",
       topicId: "0.0.5001",
       sequenceNumber: 7,
-      correlationId: "test-corr-id",
-      actorId: "0.0.100",
-      recipientId: "0.0.800",
-      amountHbar: 5.0,
-      decision: "APPROVED",
-      denialReason: null,
-      txId: "0.0.3@1234567890.000",
-      timestamp: new Date().toISOString(),
-      payloadHash: "",
-      scheduleId: "",
-      agentContext: null,
     });
     reloadStore();
   });
@@ -285,19 +293,23 @@ describe("run() — DENIED path", () => {
   beforeEach(() => {
     vi.mocked(executeHbarTransfer).mockClear();
     vi.mocked(recordAudit).mockResolvedValue({
+      message: {
+        correlationId: "test-corr-id",
+        timestamp: new Date().toISOString(),
+        action: {} as any,
+        policyResult: {} as any,
+        txId: "",
+        scheduleId: "",
+        topicId: "0.0.5001",
+        sequenceNumber: 8,
+        payloadHash: "",
+        policyVersion: "",
+        caller: null,
+      },
+      state: "written",
+      entryId: "mock-entry-id",
       topicId: "0.0.5001",
       sequenceNumber: 8,
-      correlationId: "test-corr-id",
-      actorId: "0.0.100",
-      recipientId: "0.0.999",
-      amountHbar: 5.0,
-      decision: "DENIED",
-      denialReason: "RECIPIENT_NOT_APPROVED",
-      txId: "",
-      timestamp: new Date().toISOString(),
-      payloadHash: "",
-      scheduleId: "",
-      agentContext: null,
     });
     reloadStore();
   });
@@ -348,10 +360,13 @@ describe("run() — transfer failure", () => {
   });
 });
 
-describe("run() — audit failure is non-fatal", () => {
+describe("run() — audit outbox failure is non-fatal (disk/permission error)", () => {
+  // This path simulates a real outbox append failure (e.g. disk full).
+  // HCS transient failures are handled inside record() and return state=queued,
+  // not a thrown error. Only outbox.enqueue() failure propagates as a throw.
   beforeEach(() => {
     vi.mocked(executeHbarTransfer).mockResolvedValue({ txId: "0.0.3@1234567890.000" });
-    vi.mocked(recordAudit).mockRejectedValue(new Error("HCS unavailable"));
+    vi.mocked(recordAudit).mockRejectedValue(new Error("ENOSPC: no space left on device"));
     reloadStore();
   });
   afterEach(() => {
@@ -363,7 +378,7 @@ describe("run() — audit failure is non-fatal", () => {
     await expect(run(makeAction())).resolves.toBeDefined();
   });
 
-  it("stage is EXECUTED (not AUDITED) when audit fails after successful transfer", async () => {
+  it("stage is EXECUTED (not AUDITED) when audit outbox fails after successful transfer", async () => {
     const result = await run(makeAction());
     expect(result.stage).toBe("EXECUTED");
   });
@@ -371,6 +386,48 @@ describe("run() — audit failure is non-fatal", () => {
   it("txId is still populated even when audit fails", async () => {
     const result = await run(makeAction());
     expect(result.txId).toBe("0.0.3@1234567890.000");
+  });
+
+  it("auditStatus is failed when outbox throws", async () => {
+    const result = await run(makeAction());
+    expect(result.auditStatus).toBe("failed");
+  });
+});
+
+describe("run() — audit queued (HCS down, outbox durable)", () => {
+  // Simulates HCS submission failure: record() succeeds (entry durably queued)
+  // but returns state="queued". Pipeline should treat this as normal — we have
+  // durable evidence, just not yet on Hedera.
+  beforeEach(() => {
+    vi.mocked(executeHbarTransfer).mockResolvedValue({ txId: "0.0.3@1234567890.000" });
+    vi.mocked(recordAudit).mockResolvedValue({
+      message: {} as any,
+      state: "queued",
+      entryId: "mock-entry-id",
+      topicId: "",
+      sequenceNumber: -1,
+    });
+    reloadStore();
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+    reloadStore();
+  });
+
+  it("stage is AUDITED when audit is queued (durable)", async () => {
+    const result = await run(makeAction());
+    expect(result.stage).toBe("AUDITED");
+  });
+
+  it("auditStatus is queued", async () => {
+    const result = await run(makeAction());
+    expect(result.auditStatus).toBe("queued");
+  });
+
+  it("hcsTopicId and hcsSequenceNumber are empty when queued", async () => {
+    const result = await run(makeAction());
+    expect(result.hcsTopicId).toBe("");
+    expect(result.hcsSequenceNumber).toBe(-1);
   });
 });
 

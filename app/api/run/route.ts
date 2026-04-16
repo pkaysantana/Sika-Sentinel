@@ -9,6 +9,12 @@
  *   - instruction is trimmed before processing
  *   - empty / whitespace-only instructions are rejected (400)
  *   - instructions longer than MAX_INSTRUCTION_LENGTH chars are rejected (400)
+ *
+ * Auth (Milestone 1B):
+ *   - Caller is resolved from x-sika-caller / x-sika-caller-secret headers.
+ *   - In dev mode (SIKA_ALLOW_DEV_CALLER enabled), missing headers resolve
+ *     to the synthetic dev-local caller — local UI keeps working without creds.
+ *   - If the caller cannot act as the requested actorId, 403 is returned.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -17,6 +23,7 @@ import { run } from "../../../src/runtime/pipeline";
 import { record as recordAudit } from "../../../src/audit/trail";
 import type { AgentContext } from "../../../src/schemas/audit";
 import { runLimiter } from "../../../src/middleware/limiters";
+import { authorizeActor } from "../../../src/auth/middleware";
 
 const MAX_INSTRUCTION_LENGTH = 500;
 
@@ -59,6 +66,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "actorId is required" }, { status: 400 });
   }
 
+  // Resolve and authorise caller before any execution
+  const authResult = authorizeActor(req, actorId);
+  if (!authResult.ok) {
+    return NextResponse.json({ error: authResult.error }, { status: authResult.status });
+  }
+  const callerRef = { id: authResult.caller.id, kind: authResult.caller.kind };
+
   try {
     // Stage 1: Intent Agent — parse natural language → structured action
     const parseResult = await parseInstruction(rawInstruction, actorId);
@@ -89,15 +103,18 @@ export async function POST(req: NextRequest) {
 
       let hcsTopicId = "";
       let hcsSequenceNumber = -1;
+      let auditStatus: "written" | "queued" | "failed" = "failed";
       try {
-        const auditMsg = await recordAudit(
-          parseResult.action,
-          blockedPolicyResult,
-          "",           // no txId — execution never ran
-          agentContext
-        );
-        hcsTopicId = auditMsg.topicId;
-        hcsSequenceNumber = auditMsg.sequenceNumber;
+        const auditRecord = await recordAudit({
+          action: parseResult.action,
+          policyResult: blockedPolicyResult,
+          txId: "",
+          agentContext,
+          caller: callerRef,
+        });
+        hcsTopicId = auditRecord.topicId;
+        hcsSequenceNumber = auditRecord.sequenceNumber;
+        auditStatus = auditRecord.state;
       } catch {
         // Audit failure is non-fatal — still return the PARSE_BLOCKED response
       }
@@ -113,6 +130,7 @@ export async function POST(req: NextRequest) {
         scheduleId: "",
         hcsTopicId,
         hcsSequenceNumber,
+        auditStatus,
         error: clarification,
         parseResult,
       });
@@ -127,7 +145,7 @@ export async function POST(req: NextRequest) {
     };
 
     // Stage 2: Runtime pipeline — policy + execution + audit
-    const pipelineResult = await run(parseResult.action, agentContext);
+    const pipelineResult = await run(parseResult.action, agentContext, callerRef);
 
     // Merge: pipeline result fields stay top-level; parseResult is nested
     return NextResponse.json({ ...pipelineResult, parseResult });

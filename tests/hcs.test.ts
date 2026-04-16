@@ -43,6 +43,7 @@ function makeAuditMessage(overrides: Partial<AuditMessage> = {}): AuditMessage {
     sequenceNumber: -1,
     payloadHash: "",
     policyVersion: "",
+    caller: null,
     ...overrides,
     // action must match correlationId — rebuild if correlationId was overridden
     ...(overrides.correlationId ? { action: { ...action, correlationId: overrides.correlationId as string } } : {}),
