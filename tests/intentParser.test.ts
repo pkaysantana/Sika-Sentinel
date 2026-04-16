@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { parseInstruction, isLlmAvailable } from "../src/agents/intentParser";
+import { describe, it, expect, beforeEach } from "vitest";
+import { parseInstruction } from "../src/agents/intentParser";
 
 // No LLM keys — all tests use heuristic path
 beforeEach(() => {
