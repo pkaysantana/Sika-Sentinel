@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { parseInstruction } from "../src/agents/intentParser";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { parseInstruction, isLlmAvailable } from "../src/agents/intentParser";
 
 // No LLM keys — all tests use heuristic path
 beforeEach(() => {
@@ -236,5 +236,200 @@ describe("shouldProceed and ambiguity handling", () => {
     const r = await parseInstruction("Send 5 HBAR to someone", "0.0.8570111");
     expect(r.shouldProceed).toBe(true);
     expect(r.parseWarnings.some((w) => /recipient/i.test(w))).toBe(true);
+  });
+});
+
+// ── llmStatus ─────────────────────────────────────────────────────────────────
+
+describe("llmStatus — heuristic path (no LLM key)", () => {
+  it('is "ok" for a high-confidence instruction', async () => {
+    const r = await parseInstruction("Send 5 HBAR to 0.0.8570146", "0.0.8570111");
+    expect(r.llmStatus).toBe("ok");
+  });
+
+  it('is "ok" for a blocked (low-confidence) instruction', async () => {
+    const r = await parseInstruction("please do the thing", "0.0.8570111");
+    expect(r.llmStatus).toBe("ok");
+  });
+
+  it('is "ok" for a balance check', async () => {
+    const r = await parseInstruction("Check my balance", "0.0.8570111");
+    expect(r.llmStatus).toBe("ok");
+  });
+});
+
+// ── LLM failure fallback ──────────────────────────────────────────────────────
+//
+// We set an API key so parseInstruction enters the LLM branch, then mock
+// @langchain/openai to simulate different failure modes. Tests verify:
+//   - parseInstruction never throws
+//   - deterministic heuristic result is returned
+//   - llmStatus reflects failure/fallback distinction
+//   - parseErrors contains the LLM failure reason
+//   - retry budget is consumed before falling back (via retryOptions injection)
+
+describe("LLM failure — 5xx server error (retries exhausted)", () => {
+  beforeEach(() => {
+    process.env.OPENAI_API_KEY = "test-key";
+  });
+
+  it("never throws when LLM fails with 5xx", async () => {
+    vi.doMock("@langchain/openai", () => ({
+      ChatOpenAI: vi.fn().mockImplementation(() => ({
+        withStructuredOutput: () => ({
+          invoke: vi.fn().mockRejectedValue({ status: 500, message: "Internal Server Error" }),
+        }),
+      })),
+    }));
+    await expect(
+      parseInstruction("Send 5 HBAR to 0.0.8570146", "0.0.8570111", { maxRetries: 0, delay: async () => {} })
+    ).resolves.toBeDefined();
+    vi.doUnmock("@langchain/openai");
+  });
+
+  it('returns llmStatus "fallback" when heuristic result can proceed', async () => {
+    vi.doMock("@langchain/openai", () => ({
+      ChatOpenAI: vi.fn().mockImplementation(() => ({
+        withStructuredOutput: () => ({
+          invoke: vi.fn().mockRejectedValue({ status: 503, message: "Overloaded" }),
+        }),
+      })),
+    }));
+    // High-confidence instruction — heuristic would proceed
+    const r = await parseInstruction(
+      "Send 5 HBAR to 0.0.8570146",
+      "0.0.8570111",
+      { maxRetries: 0, delay: async () => {} }
+    );
+    expect(r.llmStatus).toBe("fallback");
+    expect(r.shouldProceed).toBe(true);
+    vi.doUnmock("@langchain/openai");
+  });
+
+  it('returns llmStatus "failed" when heuristic fallback is also blocked', async () => {
+    vi.doMock("@langchain/openai", () => ({
+      ChatOpenAI: vi.fn().mockImplementation(() => ({
+        withStructuredOutput: () => ({
+          invoke: vi.fn().mockRejectedValue({ status: 500, message: "Internal Server Error" }),
+        }),
+      })),
+    }));
+    // Low-confidence instruction — heuristic blocks, and LLM would have been needed
+    const r = await parseInstruction(
+      "send something somewhere",
+      "0.0.8570111",
+      { maxRetries: 0, delay: async () => {} }
+    );
+    expect(r.llmStatus).toBe("failed");
+    expect(r.shouldProceed).toBe(false);
+    vi.doUnmock("@langchain/openai");
+  });
+
+  it("appends LLM failure reason to parseErrors", async () => {
+    vi.doMock("@langchain/openai", () => ({
+      ChatOpenAI: vi.fn().mockImplementation(() => ({
+        withStructuredOutput: () => ({
+          invoke: vi.fn().mockRejectedValue({ status: 500, message: "provider down" }),
+        }),
+      })),
+    }));
+    const r = await parseInstruction(
+      "Send 5 HBAR to 0.0.8570146",
+      "0.0.8570111",
+      { maxRetries: 0, delay: async () => {} }
+    );
+    expect(r.parseErrors.some((e) => /LLM unavailable/i.test(e))).toBe(true);
+    vi.doUnmock("@langchain/openai");
+  });
+
+  it("returns deterministic heuristic action fields on LLM failure", async () => {
+    vi.doMock("@langchain/openai", () => ({
+      ChatOpenAI: vi.fn().mockImplementation(() => ({
+        withStructuredOutput: () => ({
+          invoke: vi.fn().mockRejectedValue({ status: 500, message: "down" }),
+        }),
+      })),
+    }));
+    const r = await parseInstruction(
+      "Send 10 HBAR to 0.0.9999",
+      "0.0.8570111",
+      { maxRetries: 0, delay: async () => {} }
+    );
+    // Heuristic should extract these correctly
+    expect(r.action.amountHbar).toBe(10);
+    expect(r.action.recipientId).toBe("0.0.9999");
+    expect(r.parserMode).toBe("heuristic");
+    vi.doUnmock("@langchain/openai");
+  });
+});
+
+describe("LLM failure — 4xx client error (no retry)", () => {
+  beforeEach(() => {
+    process.env.OPENAI_API_KEY = "test-key";
+  });
+
+  it("never throws on 401 auth failure", async () => {
+    vi.doMock("@langchain/openai", () => ({
+      ChatOpenAI: vi.fn().mockImplementation(() => ({
+        withStructuredOutput: () => ({
+          invoke: vi.fn().mockRejectedValue({ status: 401, message: "Unauthorized" }),
+        }),
+      })),
+    }));
+    await expect(
+      parseInstruction("Send 5 HBAR to 0.0.8570146", "0.0.8570111", { maxRetries: 0, delay: async () => {} })
+    ).resolves.toBeDefined();
+    vi.doUnmock("@langchain/openai");
+  });
+
+  it('sets llmStatus "fallback" on 401 when heuristic can proceed', async () => {
+    vi.doMock("@langchain/openai", () => ({
+      ChatOpenAI: vi.fn().mockImplementation(() => ({
+        withStructuredOutput: () => ({
+          invoke: vi.fn().mockRejectedValue({ status: 401, message: "Unauthorized" }),
+        }),
+      })),
+    }));
+    const r = await parseInstruction(
+      "Send 5 HBAR to 0.0.8570146",
+      "0.0.8570111",
+      { maxRetries: 0, delay: async () => {} }
+    );
+    expect(r.llmStatus).toBe("fallback");
+    vi.doUnmock("@langchain/openai");
+  });
+});
+
+describe("LLM retry — succeeds on second attempt", () => {
+  beforeEach(() => {
+    process.env.OPENAI_API_KEY = "test-key";
+  });
+
+  it('returns llmStatus "ok" when LLM succeeds after one retry', async () => {
+    let calls = 0;
+    vi.doMock("@langchain/openai", () => ({
+      ChatOpenAI: vi.fn().mockImplementation(() => ({
+        withStructuredOutput: () => ({
+          invoke: vi.fn().mockImplementation(async () => {
+            calls++;
+            if (calls === 1) throw { status: 500, message: "transient" };
+            return {
+              actionType: "HBAR_TRANSFER",
+              recipientId: "0.0.8570146",
+              amountHbar: 5,
+              memo: "",
+            };
+          }),
+        }),
+      })),
+    }));
+    const r = await parseInstruction(
+      "Send 5 HBAR to 0.0.8570146",
+      "0.0.8570111",
+      { maxRetries: 1, delay: async () => {} }
+    );
+    expect(r.llmStatus).toBe("ok");
+    expect(r.parserMode).toBe("llm");
+    vi.doUnmock("@langchain/openai");
   });
 });

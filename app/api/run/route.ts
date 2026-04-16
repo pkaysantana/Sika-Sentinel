@@ -131,6 +131,7 @@ export async function POST(req: NextRequest) {
         hcsTopicId,
         hcsSequenceNumber,
         auditStatus,
+        llmStatus: parseResult.llmStatus,
         error: clarification,
         parseResult,
       });
@@ -145,7 +146,7 @@ export async function POST(req: NextRequest) {
     };
 
     // Stage 2: Runtime pipeline — policy + execution + audit
-    const pipelineResult = await run(parseResult.action, agentContext, callerRef);
+    const pipelineResult = await run(parseResult.action, agentContext, callerRef, parseResult.llmStatus);
 
     // Merge: pipeline result fields stay top-level; parseResult is nested
     return NextResponse.json({ ...pipelineResult, parseResult });

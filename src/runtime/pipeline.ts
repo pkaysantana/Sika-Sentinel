@@ -54,6 +54,14 @@ export interface PipelineResult {
    */
   auditStatus: "written" | "queued" | "failed";
 
+  /**
+   * LLM parse status from the intent parser phase.
+   *   "ok"       — LLM was not needed or succeeded.
+   *   "fallback" — LLM failed; heuristic fallback was used; result may proceed.
+   *   "failed"   — LLM failed AND heuristic result is also blocked.
+   */
+  llmStatus: "ok" | "fallback" | "failed";
+
   // Error path
   error: string;
 }
@@ -98,6 +106,7 @@ export function runPolicyOnly(action: Action): PipelineResult {
       hcsTopicId: "",
       hcsSequenceNumber: -1,
       auditStatus: "failed",
+      llmStatus: "ok",
       error: String(err),
     };
   }
@@ -117,6 +126,7 @@ export function runPolicyOnly(action: Action): PipelineResult {
     hcsTopicId: "",
     hcsSequenceNumber: -1,
     auditStatus: "failed",
+    llmStatus: "ok",
     error: "",
   };
 }
@@ -137,7 +147,8 @@ export function runPolicyOnly(action: Action): PipelineResult {
 export async function run(
   action: Action,
   agentContext?: AgentContext,
-  caller?: CallerReference
+  caller?: CallerReference,
+  llmStatus?: "ok" | "fallback" | "failed"
 ): Promise<PipelineResult> {
   // Phase 1
   const phase1 = runPolicyOnly(action);
@@ -151,6 +162,7 @@ export async function run(
   let scheduleError = "";
   let stage: PipelineStage = "POLICY_EVALUATED";
   let auditStatus: "written" | "queued" | "failed" = "failed";
+  const resolvedLlmStatus = llmStatus ?? "ok";
 
   const decision = policyResult!.decision;
 
@@ -169,6 +181,7 @@ export async function run(
           scheduleError: "",
           stage: "ERROR",
           auditStatus: "failed",
+          llmStatus: resolvedLlmStatus,
           error: `Transfer failed: ${err}`,
         };
       }
@@ -186,6 +199,7 @@ export async function run(
           scheduleError: "",
           stage: "ERROR",
           auditStatus: "failed",
+          llmStatus: resolvedLlmStatus,
           error: `Balance query failed: ${err}`,
         };
       }
@@ -244,6 +258,7 @@ export async function run(
     hcsTopicId,
     hcsSequenceNumber,
     auditStatus,
+    llmStatus: resolvedLlmStatus,
     error: "",
   };
 }

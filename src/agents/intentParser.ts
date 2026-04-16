@@ -20,6 +20,7 @@
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { ActionSchema, type Action, type ActionType } from "../schemas/action";
+import { withLlmRetry, type LlmRetryOptions } from "./llmRetry";
 
 // ── ParseResult schema ────────────────────────────────────────────────────────
 
@@ -54,6 +55,15 @@ export interface ParseResult {
    * null when shouldProceed is true.
    */
   clarificationMessage: string | null;
+  /**
+   * Outcome of the LLM call, when one was attempted.
+   *   "ok"       — LLM was not needed (heuristic was sufficient) or LLM succeeded.
+   *   "fallback" — LLM was tried but failed; the heuristic result was returned
+   *                and `shouldProceed` may still be true.
+   *   "failed"   — LLM failed AND the resulting parse cannot safely proceed
+   *                (shouldProceed is false). Both paths are blocked.
+   */
+  llmStatus: "ok" | "fallback" | "failed";
 }
 
 // ── Confidence thresholds ─────────────────────────────────────────────────────
@@ -276,6 +286,7 @@ function extractHeuristic(
       shouldProceed,
       parseWarnings,
       clarificationMessage,
+      llmStatus: "ok" as const,
       workflowContext: {
         rawInstruction,
         detectedIntent: intent,
@@ -298,10 +309,10 @@ const LlmOutputSchema = z.object({
 
 async function extractViaLlm(
   rawInstruction: string,
-  actorId: string
+  actorId: string,
+  retryOptions?: LlmRetryOptions
 ): Promise<ParseResult> {
   if (!isLlmAvailable()) throw new Error("No LLM API key configured");
-  const apiKey = process.env.OPENAI_API_KEY ?? process.env.ANTHROPIC_API_KEY;
 
   const { ChatOpenAI } = await import("@langchain/openai");
   const model = new ChatOpenAI({
@@ -310,19 +321,23 @@ async function extractViaLlm(
   });
 
   const structured = model.withStructuredOutput(LlmOutputSchema);
-  const llmResult = await structured.invoke([
-    {
-      role: "system",
-      content: [
-        "You are a financial instruction parser for a Hedera blockchain governance system.",
-        "Extract structured transfer or balance-check details from natural-language instructions.",
-        "Hedera account IDs look like 0.0.12345.",
-        "Return actionType=HBAR_TRANSFER for any payment/send/transfer instruction.",
-        "Return actionType=CHECK_BALANCE for balance queries.",
-      ].join(" "),
-    },
-    { role: "user", content: rawInstruction },
-  ]);
+  const llmResult = await withLlmRetry(
+    () =>
+      structured.invoke([
+        {
+          role: "system",
+          content: [
+            "You are a financial instruction parser for a Hedera blockchain governance system.",
+            "Extract structured transfer or balance-check details from natural-language instructions.",
+            "Hedera account IDs look like 0.0.12345.",
+            "Return actionType=HBAR_TRANSFER for any payment/send/transfer instruction.",
+            "Return actionType=CHECK_BALANCE for balance queries.",
+          ].join(" "),
+        },
+        { role: "user", content: rawInstruction },
+      ]),
+    retryOptions
+  );
 
   const parseErrors: string[] = [];
   if (llmResult.actionType === "HBAR_TRANSFER") {
@@ -373,6 +388,7 @@ async function extractViaLlm(
     shouldProceed,
     parseWarnings,
     clarificationMessage,
+    llmStatus: "ok" as const,
     workflowContext: {
       rawInstruction,
       detectedIntent: llmResult.actionType,
@@ -392,11 +408,16 @@ async function extractViaLlm(
  *   - heuristic confidence < 0.75 for a transfer intent, AND
  *   - an LLM API key is available in the environment.
  *
- * Never throws — LLM failures return the heuristic result with a parse error.
+ * Never throws — LLM failures return the heuristic result with a parse error
+ * and an appropriate llmStatus ("fallback" or "failed").
+ *
+ * `retryOptions` is injectable for tests (primarily to zero out the delay
+ * so retry tests do not sleep in CI).
  */
 export async function parseInstruction(
   rawInstruction: string,
-  actorId: string
+  actorId: string,
+  retryOptions?: LlmRetryOptions
 ): Promise<ParseResult> {
   const { result: heuristicResult, needsLlm } = extractHeuristic(
     rawInstruction,
@@ -407,15 +428,20 @@ export async function parseInstruction(
   if (!isLlmAvailable()) return heuristicResult;
 
   try {
-    return await extractViaLlm(rawInstruction, actorId);
+    return await extractViaLlm(rawInstruction, actorId, retryOptions);
   } catch (err) {
-    // LLM failed — return heuristic result with a warning appended
-    return {
+    // LLM failed after all retries (or immediately on non-retryable errors).
+    // Return the deterministic heuristic result so the pipeline can still
+    // make a safe policy decision.  We append a parse error for observability
+    // and set llmStatus to distinguish "fell back safely" from "blocked".
+    const fallbackResult: ParseResult = {
       ...heuristicResult,
       parseErrors: [
         ...heuristicResult.parseErrors,
-        `LLM fallback failed: ${err instanceof Error ? err.message : String(err)}`,
+        `LLM unavailable: ${err instanceof Error ? err.message : String(err)}`,
       ],
+      llmStatus: heuristicResult.shouldProceed ? "fallback" : "failed",
     };
+    return fallbackResult;
   }
 }
