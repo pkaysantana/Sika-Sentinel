@@ -388,9 +388,9 @@ describe("run() — audit outbox failure is non-fatal (disk/permission error)", 
     expect(result.txId).toBe("0.0.3@1234567890.000");
   });
 
-  it("auditStatus is failed when outbox throws", async () => {
+  it("auditStatus is failed_terminal when outbox throws", async () => {
     const result = await run(makeAction());
-    expect(result.auditStatus).toBe("failed");
+    expect(result.auditStatus).toBe("failed_terminal");
   });
 });
 

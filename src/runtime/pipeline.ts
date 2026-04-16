@@ -106,7 +106,7 @@ export function runPolicyOnly(action: Action): PipelineResult {
       scheduleError: "",
       hcsTopicId: "",
       hcsSequenceNumber: -1,
-      auditStatus: "failed",
+      auditStatus: "failed_terminal",
       llmStatus: "ok",
       error: String(err),
     };
@@ -126,7 +126,7 @@ export function runPolicyOnly(action: Action): PipelineResult {
     scheduleError: "",
     hcsTopicId: "",
     hcsSequenceNumber: -1,
-    auditStatus: "failed",
+    auditStatus: "failed_terminal",
     llmStatus: "ok",
     error: "",
   };
@@ -162,7 +162,7 @@ export async function run(
   let scheduleId = "";
   let scheduleError = "";
   let stage: PipelineStage = "POLICY_EVALUATED";
-  let auditStatus: "written" | "queued" | "failed" = "failed";
+  let auditStatus: "written" | "queued" | "failed_terminal" = "failed_terminal";
   const resolvedLlmStatus = llmStatus ?? "ok";
 
   const decision = policyResult!.decision;
@@ -181,7 +181,7 @@ export async function run(
           scheduleId: "",
           scheduleError: "",
           stage: "ERROR",
-          auditStatus: "failed",
+          auditStatus: "failed_terminal",
           llmStatus: resolvedLlmStatus,
           error: `Transfer failed: ${err}`,
         };
@@ -199,7 +199,7 @@ export async function run(
           scheduleId: "",
           scheduleError: "",
           stage: "ERROR",
-          auditStatus: "failed",
+          auditStatus: "failed_terminal",
           llmStatus: resolvedLlmStatus,
           error: `Balance query failed: ${err}`,
         };
@@ -240,9 +240,9 @@ export async function run(
     if (stage !== "SCHEDULED") stage = "AUDITED";
   } catch (err) {
     // Outbox append itself failed — durable evidence could not be stored.
-    // This is a loud failure: we log it and surface auditStatus="failed",
+    // This is a loud failure: we log it and surface auditStatus="failed_terminal",
     // but do not override stage to ERROR since execution may have completed.
-    auditStatus = "failed";
+    auditStatus = "failed_terminal";
     console.error(`Audit outbox enqueue failed for action ${action.correlationId}: ${err}`);
   }
 

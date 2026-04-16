@@ -279,10 +279,120 @@ describe("drain", () => {
     expect(counts.stillQueued).toBe(2);
   });
 
-  it("returns { written: 0, stillQueued: 0 } when outbox is empty", async () => {
+  it("returns { written: 0, stillQueued: 0, terminal: 0 } when outbox is empty", async () => {
     const box = freshOutbox();
     const counts = await box.drain(successShipper());
-    expect(counts).toEqual({ written: 0, stillQueued: 0 });
+    expect(counts).toEqual({ written: 0, stillQueued: 0, terminal: 0 });
+  });
+
+  it("counts terminal entries separately from still-queued", async () => {
+    // maxShipAttempts=1 so a single failure immediately marks terminal
+    const box = createOutbox(new MemoryOutboxBackend(), { maxShipAttempts: 1 });
+    box.enqueue(makeMessage({ correlationId: "x" }));
+    const counts = await box.drain(failingShipper());
+    expect(counts.terminal).toBe(1);
+    expect(counts.stillQueued).toBe(0);
+  });
+
+  it("skips entries whose nextAttemptAt is in the future", async () => {
+    const box = freshOutbox();
+    const entry = box.enqueue(makeMessage());
+    // Manually push nextAttemptAt to the future via a ship failure
+    await box.ship(entry.id, failingShipper());
+    // At this point the entry has nextAttemptAt set to ~30s in the future
+    // A second drain should skip it (still backoff-pending)
+    const counts = await box.drain(failingShipper());
+    expect(counts.stillQueued).toBe(1);
+    expect(counts.written).toBe(0);
+  });
+});
+
+// ── max attempts → auto failed_terminal ──────────────────────────────────────
+
+describe("max attempts — auto failed_terminal", () => {
+  it("marks entry failed_terminal after maxShipAttempts failures", async () => {
+    const box = createOutbox(new MemoryOutboxBackend(), {
+      maxShipAttempts: 3,
+      backoffMs: () => 0, // no delay so drain can re-attempt without time travel
+    });
+    const entry = box.enqueue(makeMessage());
+    // Ship fails 3 times — on the 3rd failure it should go terminal
+    await box.ship(entry.id, failingShipper());
+    await box.ship(entry.id, failingShipper());
+    await box.ship(entry.id, failingShipper());
+    expect(box.get(entry.id)?.state).toBe("failed_terminal");
+  });
+
+  it("returns ok=false with terminal entry on last attempt", async () => {
+    const box = createOutbox(new MemoryOutboxBackend(), { maxShipAttempts: 2, backoffMs: () => 0 });
+    const entry = box.enqueue(makeMessage());
+    await box.ship(entry.id, failingShipper());
+    const result = await box.ship(entry.id, failingShipper());
+    expect(result.ok).toBe(false);
+    expect(result.entry.state).toBe("failed_terminal");
+  });
+
+  it("stops retrying a failed_terminal entry", async () => {
+    const box = createOutbox(new MemoryOutboxBackend(), { maxShipAttempts: 1, backoffMs: () => 0 });
+    const entry = box.enqueue(makeMessage());
+    await box.ship(entry.id, failingShipper()); // → failed_terminal
+    const stub = vi.fn().mockImplementation(successShipper());
+    const result = await box.ship(entry.id, stub);
+    expect(stub).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+  });
+});
+
+// ── nextAttemptAt / backoff scheduling ───────────────────────────────────────
+
+describe("nextAttemptAt — backoff scheduling", () => {
+  it("sets nextAttemptAt after first failure with custom backoff", async () => {
+    const box = createOutbox(new MemoryOutboxBackend(), { backoffMs: () => 60_000 });
+    const entry = box.enqueue(makeMessage());
+    await box.ship(entry.id, failingShipper());
+    const updated = box.get(entry.id)!;
+    expect(updated.nextAttemptAt).not.toBeNull();
+    // nextAttemptAt should be ~60s in the future
+    const diff = new Date(updated.nextAttemptAt!).getTime() - Date.now();
+    expect(diff).toBeGreaterThan(50_000);
+    expect(diff).toBeLessThan(70_000);
+  });
+
+  it("new entry has nextAttemptAt=null", () => {
+    const box = freshOutbox();
+    const entry = box.enqueue(makeMessage());
+    expect(entry.nextAttemptAt).toBeNull();
+  });
+});
+
+// ── due() ─────────────────────────────────────────────────────────────────────
+
+describe("due()", () => {
+  it("returns newly enqueued entry (nextAttemptAt=null is always due)", () => {
+    const box = freshOutbox();
+    const entry = box.enqueue(makeMessage());
+    expect(box.due().some((e) => e.id === entry.id)).toBe(true);
+  });
+
+  it("excludes entries with future nextAttemptAt", async () => {
+    const box = createOutbox(new MemoryOutboxBackend(), { backoffMs: () => 60_000 });
+    const entry = box.enqueue(makeMessage());
+    await box.ship(entry.id, failingShipper()); // sets nextAttemptAt ~60s out
+    expect(box.due().some((e) => e.id === entry.id)).toBe(false);
+  });
+
+  it("excludes written entries", async () => {
+    const box = freshOutbox();
+    const entry = box.enqueue(makeMessage());
+    await box.ship(entry.id, successShipper());
+    expect(box.due().some((e) => e.id === entry.id)).toBe(false);
+  });
+
+  it("excludes failed_terminal entries", () => {
+    const box = freshOutbox();
+    const entry = box.enqueue(makeMessage());
+    box.markFailedTerminal(entry.id, "done");
+    expect(box.due().some((e) => e.id === entry.id)).toBe(false);
   });
 });
 
@@ -331,6 +441,7 @@ describe("fold on load — MemoryOutboxBackend replay", () => {
       updatedAt: new Date().toISOString(),
       attempts: 0,
       lastError: null,
+      nextAttemptAt: null,
       topicId: "",
       sequenceNumber: -1,
       message: msg,
@@ -360,6 +471,7 @@ describe("fold on load — MemoryOutboxBackend replay", () => {
       updatedAt: new Date().toISOString(),
       attempts: 0,
       lastError: null,
+      nextAttemptAt: null,
       topicId: "",
       sequenceNumber: -1,
       message: makeMessage({ correlationId: "a" }),
