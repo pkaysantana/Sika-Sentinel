@@ -9,6 +9,7 @@ import type { Action } from "../schemas/action";
 import type { PolicyResult } from "../schemas/policy";
 import type { ContextSnapshot } from "../context/loader";
 import type { AgentContext } from "../schemas/audit";
+import type { CallerReference } from "../auth/schemas";
 import { loadContext } from "../context/loader";
 import { evaluatePolicy } from "../policy/engine";
 import { executeHbarTransfer } from "../hedera/transfer";
@@ -43,7 +44,15 @@ export interface PipelineResult {
   // Phase 2 — HCS audit
   hcsTopicId: string;
   hcsSequenceNumber: number;
-  auditStatus: "written" | "failed";  // tracks whether audit was successfully persisted
+  /**
+   * Audit durability state.
+   *   "written" — successfully shipped to HCS.
+   *   "queued"  — durably stored locally; HCS submission pending.
+   *   "failed"  — outbox enqueue itself failed (disk/permission error).
+   *               Execution happened but we have no durable evidence — this
+   *               is a loud failure and stage will be ERROR.
+   */
+  auditStatus: "written" | "queued" | "failed";
 
   // Error path
   error: string;
@@ -120,8 +129,16 @@ export function runPolicyOnly(action: Action): PipelineResult {
  *
  * Pass agentContext when the action originated from the Intent Parser Agent so
  * the audit event records what the parser believed about the instruction.
+ *
+ * Pass caller when the request was authenticated — it flows into the audit
+ * record so replayers can see who submitted the request alongside the actor
+ * whose authority was exercised.
  */
-export async function run(action: Action, agentContext?: AgentContext): Promise<PipelineResult> {
+export async function run(
+  action: Action,
+  agentContext?: AgentContext,
+  caller?: CallerReference
+): Promise<PipelineResult> {
   // Phase 1
   const phase1 = runPolicyOnly(action);
   if (phase1.stage === "ERROR") return phase1;
@@ -133,7 +150,7 @@ export async function run(action: Action, agentContext?: AgentContext): Promise<
   let scheduleId = "";
   let scheduleError = "";
   let stage: PipelineStage = "POLICY_EVALUATED";
-  let auditStatus: "written" | "failed" = "failed";
+  let auditStatus: "written" | "queued" | "failed" = "failed";
 
   const decision = policyResult!.decision;
 
@@ -194,15 +211,24 @@ export async function run(action: Action, agentContext?: AgentContext): Promise<
   let hcsTopicId = "";
   let hcsSequenceNumber = -1;
   try {
-    const auditMsg = await recordAudit(action, policyResult!, txId, agentContext, scheduleId);
-    hcsTopicId = auditMsg.topicId;
-    hcsSequenceNumber = auditMsg.sequenceNumber;
-    auditStatus = "written";
+    const auditRecord = await recordAudit({
+      action,
+      policyResult: policyResult!,
+      txId,
+      agentContext,
+      scheduleId,
+      caller: caller ?? null,
+    });
+    hcsTopicId = auditRecord.topicId;
+    hcsSequenceNumber = auditRecord.sequenceNumber;
+    auditStatus = auditRecord.state;  // "queued" or "written"
     if (stage !== "SCHEDULED") stage = "AUDITED";
   } catch (err) {
-    // Audit write failure is non-fatal, but we log it explicitly for observability
+    // Outbox append itself failed — durable evidence could not be stored.
+    // This is a loud failure: we log it and surface auditStatus="failed",
+    // but do not override stage to ERROR since execution may have completed.
     auditStatus = "failed";
-    console.error(`HCS audit write failed for action ${action.correlationId}: ${err}`);
+    console.error(`Audit outbox enqueue failed for action ${action.correlationId}: ${err}`);
   }
 
   return {
