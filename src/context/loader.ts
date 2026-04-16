@@ -5,6 +5,15 @@
  *   1. Path given by the CONTEXT_STORE_PATH environment variable
  *   2. scripts/context_store.json  (default fixture location)
  *   3. Built-in in-memory fallback  (demo always works, even without a file)
+ *
+ * Milestone 2
+ * -----------
+ *   The store now models organisations and multi-role actors:
+ *     - Organisation { id, name }
+ *     - Actor { id, orgId, roles: Role[], ... }
+ *   Legacy single-`role` actor records are still accepted and transparently
+ *   widened to `roles: [role]` with orgId defaulting to a synthetic
+ *   "org-legacy" so old fixtures keep working without modification.
  */
 
 import { z } from "zod";
@@ -17,14 +26,45 @@ import { promises as fsPromises } from "fs";
 export const TreasuryPostureSchema = z.enum(["NORMAL", "RESTRICTED", "FROZEN"]);
 export type TreasuryPosture = z.infer<typeof TreasuryPostureSchema>;
 
-export const ActorRoleSchema = z.enum(["OPERATOR", "PARTNER", "ADMIN"]);
+/**
+ * Actor role enum. Legacy roles (OPERATOR/PARTNER/ADMIN) are preserved so
+ * existing fixtures continue to load; Milestone 2 adds APPROVER and AGENT.
+ */
+export const ActorRoleSchema = z.enum([
+  "OPERATOR",
+  "PARTNER",
+  "ADMIN",
+  "APPROVER",
+  "AGENT",
+]);
 export type ActorRole = z.infer<typeof ActorRoleSchema>;
+
+/** Default org id used when a fixture does not declare organisations. */
+export const LEGACY_ORG_ID = "org-legacy";
+
+// ── Organisation ──────────────────────────────────────────────────────────────
+
+export const OrganisationSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().default(""),
+});
+export type Organisation = z.infer<typeof OrganisationSchema>;
 
 // ── ContextSnapshot ───────────────────────────────────────────────────────────
 
 export const ContextSnapshotSchema = z.object({
   actorId: z.string(),
+  /** Primary (legacy) role. Always populated; equals roles[0] when roles is non-empty. */
   actorRole: ActorRoleSchema,
+  /**
+   * Multi-role set. Optional on the schema because existing tests construct
+   * ContextSnapshot literals without it; the loader always populates this.
+   * Consumers should prefer `roles` and fall back to `[actorRole]` when
+   * `roles` is absent or empty.
+   */
+  roles: z.array(ActorRoleSchema).optional(),
+  /** Organisation this actor belongs to. Optional for the same reason as `roles`. */
+  orgId: z.string().optional(),
   partnerId: z.string(),
   amountThresholdHbar: z.number(),
   approvedRecipients: z.array(z.string()).default([]),
@@ -37,26 +77,78 @@ export type ContextSnapshot = z.infer<typeof ContextSnapshotSchema>;
 // Backwards-compatible alias
 export type PolicyContext = ContextSnapshot;
 
+/** Return the role set for a snapshot, collapsing the legacy single-role case. */
+export function rolesOf(ctx: ContextSnapshot): ActorRole[] {
+  if (ctx.roles && ctx.roles.length > 0) return ctx.roles;
+  return [ctx.actorRole];
+}
+
+/** Return the org id for a snapshot, falling back to the legacy org when absent. */
+export function orgOf(ctx: ContextSnapshot): string {
+  return ctx.orgId ?? LEGACY_ORG_ID;
+}
+
 // ── Store schema (internal) ───────────────────────────────────────────────────
 
-const ActorRecordSchema = z.object({
-  role: ActorRoleSchema,
-  partner_id: z.string(),
-  amount_threshold_hbar: z.number(),
-  approved_recipients: z.array(z.string()).default([]),
-  enforce_recipient_allowlist: z.boolean().default(true),
-});
+const ActorRecordSchema = z
+  .object({
+    // `role` is legacy (single string). `roles` is the new multi-role field.
+    // At least one of the two must be present; see normaliseActor() below.
+    role: ActorRoleSchema.optional(),
+    roles: z.array(ActorRoleSchema).optional(),
+    org_id: z.string().optional(),
+    partner_id: z.string(),
+    amount_threshold_hbar: z.number(),
+    approved_recipients: z.array(z.string()).default([]),
+    enforce_recipient_allowlist: z.boolean().default(true),
+  })
+  .refine(
+    (v) => v.role !== undefined || (v.roles !== undefined && v.roles.length > 0),
+    { message: "Actor record must declare either `role` or a non-empty `roles[]`." }
+  );
 
 const TreasuryRecordSchema = z.object({
   posture: TreasuryPostureSchema.default("NORMAL"),
 });
 
+const OrganisationRecordSchema = z.object({
+  name: z.string().default(""),
+});
+
 const ContextStoreSchema = z.object({
   treasury: TreasuryRecordSchema.default({ posture: "NORMAL" }),
+  organisations: z.record(z.string(), OrganisationRecordSchema).optional(),
   actors: z.record(z.string(), ActorRecordSchema).default({}),
 });
 
 type ContextStore = z.infer<typeof ContextStoreSchema>;
+type ActorRecord = z.infer<typeof ActorRecordSchema>;
+
+interface NormalisedActor {
+  roles: ActorRole[];
+  orgId: string;
+  partnerId: string;
+  amountThresholdHbar: number;
+  approvedRecipients: string[];
+  enforceRecipientAllowlist: boolean;
+}
+
+function normaliseActor(raw: ActorRecord): NormalisedActor {
+  const roles: ActorRole[] =
+    raw.roles && raw.roles.length > 0
+      ? raw.roles
+      : raw.role
+        ? [raw.role]
+        : [];
+  return {
+    roles,
+    orgId: raw.org_id ?? LEGACY_ORG_ID,
+    partnerId: raw.partner_id,
+    amountThresholdHbar: raw.amount_threshold_hbar,
+    approvedRecipients: raw.approved_recipients,
+    enforceRecipientAllowlist: raw.enforce_recipient_allowlist,
+  };
+}
 
 // ── In-memory fallback ────────────────────────────────────────────────────────
 
@@ -65,9 +157,16 @@ type ContextStore = z.infer<typeof ContextStoreSchema>;
 function buildFallbackStore(): ContextStore {
   return {
     treasury: { posture: "NORMAL" },
+    organisations: {
+      "org-alpha": { name: "Alpha Corp" },
+      "org-beta": { name: "Beta Partners" },
+      "org-internal": { name: "Internal Ops" },
+    },
     actors: {
       "0.0.100": {
         role: "OPERATOR",
+        roles: ["OPERATOR"],
+        org_id: "org-alpha",
         partner_id: "partner-alpha",
         amount_threshold_hbar: 100.0,
         approved_recipients: ["0.0.800", "0.0.801"],
@@ -75,6 +174,8 @@ function buildFallbackStore(): ContextStore {
       },
       "0.0.200": {
         role: "PARTNER",
+        roles: ["PARTNER"],
+        org_id: "org-beta",
         partner_id: "partner-beta",
         amount_threshold_hbar: 25.0,
         approved_recipients: ["0.0.800"],
@@ -82,6 +183,8 @@ function buildFallbackStore(): ContextStore {
       },
       "0.0.300": {
         role: "ADMIN",
+        roles: ["ADMIN", "APPROVER"],
+        org_id: "org-internal",
         partner_id: "internal-ops",
         amount_threshold_hbar: 500.0,
         approved_recipients: [],
@@ -180,21 +283,67 @@ export function loadContext(
     );
   }
 
-  const actor = store.actors[actorId];
+  const actor = normaliseActor(store.actors[actorId]);
+  if (actor.roles.length === 0) {
+    throw new Error(
+      `Actor '${actorId}' has no roles declared; this should have been caught by the schema.`
+    );
+  }
 
   return {
     actorId,
-    actorRole: actor.role,
-    partnerId: actor.partner_id,
-    amountThresholdHbar: actor.amount_threshold_hbar,
-    approvedRecipients: actor.approved_recipients,
+    actorRole: actor.roles[0],
+    roles: actor.roles,
+    orgId: actor.orgId,
+    partnerId: actor.partnerId,
+    amountThresholdHbar: actor.amountThresholdHbar,
+    approvedRecipients: actor.approvedRecipients,
     treasuryPosture: store.treasury.posture,
-    enforceRecipientAllowlist: actor.enforce_recipient_allowlist,
+    enforceRecipientAllowlist: actor.enforceRecipientAllowlist,
   };
 }
 
 export function getTreasuryPosture(): TreasuryPosture {
   return loadStore().treasury.posture;
+}
+
+/**
+ * Look up the organisation for an actor without loading the full context.
+ * Returns the legacy org id when the actor record does not declare one.
+ *
+ * @throws {Error} If actorId is not registered.
+ */
+export function getActorOrgId(actorId: string): string {
+  const store = loadStore();
+  if (!(actorId in store.actors)) {
+    throw new Error(`Actor '${actorId}' is not registered.`);
+  }
+  return store.actors[actorId].org_id ?? LEGACY_ORG_ID;
+}
+
+/**
+ * Look up roles for an actor without loading the full context.
+ *
+ * @throws {Error} If actorId is not registered.
+ */
+export function getActorRoles(actorId: string): ActorRole[] {
+  const store = loadStore();
+  if (!(actorId in store.actors)) {
+    throw new Error(`Actor '${actorId}' is not registered.`);
+  }
+  return normaliseActor(store.actors[actorId]).roles;
+}
+
+/** True iff the given actor is registered in the current store. */
+export function isKnownActor(actorId: string): boolean {
+  return actorId in loadStore().actors;
+}
+
+/** List all registered organisations. */
+export function listOrganisations(): Organisation[] {
+  const store = loadStore();
+  const orgs = store.organisations ?? {};
+  return Object.entries(orgs).map(([id, rec]) => ({ id, name: rec.name }));
 }
 
 /**
