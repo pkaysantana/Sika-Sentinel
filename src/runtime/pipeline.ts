@@ -46,13 +46,14 @@ export interface PipelineResult {
   hcsSequenceNumber: number;
   /**
    * Audit durability state.
-   *   "written" — successfully shipped to HCS.
-   *   "queued"  — durably stored locally; HCS submission pending.
-   *   "failed"  — outbox enqueue itself failed (disk/permission error).
-   *               Execution happened but we have no durable evidence — this
-   *               is a loud failure and stage will be ERROR.
+   *   "written"       — successfully shipped to HCS.
+   *   "queued"        — durably stored locally; HCS submission pending
+   *                     (worker will retry with backoff).
+   *   "failed_terminal" — either outbox enqueue failed (disk/permission error)
+   *                     OR the entry exhausted its retry budget. Execution
+   *                     happened but durable audit evidence is at risk.
    */
-  auditStatus: "written" | "queued" | "failed";
+  auditStatus: "written" | "queued" | "failed_terminal";
 
   /**
    * LLM parse status from the intent parser phase.
